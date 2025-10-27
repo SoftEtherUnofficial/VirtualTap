@@ -1,0 +1,43 @@
+# Zig build artifacts
+.zig-cache/
+zig-cache/
+zig-out/
+
+# iOS build artifacts
+build_ios/
+xcframework/
+scripts/build_ios/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build logs
+*.log
+vpn_debug.log
+build.log
+3rd-party.log
+3rd-party-app-log.txt
+log-*.log
+
+# Test outputs
+*.tmp
+
+# Compiled binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+main
+
+# Temporary build files
+*.dSYM/

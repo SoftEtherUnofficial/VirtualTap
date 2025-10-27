@@ -109,6 +109,7 @@ pub const VirtualTap = struct {
     config: Config,
     stats: Stats,
     arp_table: std.ArrayList(ArpEntry),
+    arp_reply_queue: std.ArrayList([]u8), // Queue for generated ARP replies
 
     /// Initialize VirtualTap
     pub fn init(allocator: Allocator, config: Config) !*VirtualTap {
@@ -119,10 +120,11 @@ pub const VirtualTap = struct {
             .allocator = allocator,
             .config = config,
             .stats = .{},
-            .arp_table = std.ArrayList(ArpEntry).init(allocator),
+            .arp_table = .{},
+            .arp_reply_queue = .{},
         };
 
-        try self.arp_table.ensureTotalCapacity(config.arp_table_size);
+        try self.arp_table.ensureTotalCapacity(allocator, config.arp_table_size);
 
         // Add static ARP entries if known
         if (config.gateway_ip) |gw_ip| {
@@ -142,9 +144,14 @@ pub const VirtualTap = struct {
     }
 
     /// Clean up VirtualTap
-    pub fn deinit(self: *VirtualTap) void {
-        self.arp_table.deinit();
-        self.allocator.destroy(self);
+    pub fn deinit(self: *VirtualTap, allocator: std.mem.Allocator) void {
+        // Free any pending ARP replies
+        for (self.arp_reply_queue.items) |reply| {
+            allocator.free(reply);
+        }
+        self.arp_reply_queue.deinit(allocator);
+        self.arp_table.deinit(allocator);
+        allocator.destroy(self);
     }
 
     /// Convert IP packet to Ethernet frame (Platform → SoftEther)
@@ -243,9 +250,11 @@ pub const VirtualTap = struct {
         switch (ethertype) {
             ETHERTYPE_ARP => {
                 if (self.config.handle_arp) {
+                    // Handle ARP - may generate and queue a reply
                     try self.handleArp(eth_frame);
                     self.stats.arp_packets += 1;
-                    return null; // ARP handled internally
+                    // ARP handled internally, no IP packet to return
+                    return null;
                 }
                 return error.ArpNotHandled;
             },
@@ -288,7 +297,7 @@ pub const VirtualTap = struct {
         }
     }
 
-    /// Handle ARP packet internally
+    /// Handle ARP packet internally - queues ARP reply if we need to respond
     fn handleArp(self: *VirtualTap, eth_frame: []const u8) !void {
         if (eth_frame.len < ETHER_HEADER_LEN + 28) return error.ArpPacketTooShort;
 
@@ -302,8 +311,8 @@ pub const VirtualTap = struct {
         const operation = std.mem.readInt(u16, arp_packet[6..8], .big);
 
         // Validate ARP packet
-        if (hw_type != 1) return; // Ethernet
-        if (proto_type != ETHERTYPE_IP) return; // IPv4
+        if (hw_type != 1) return; // Ethernet only
+        if (proto_type != ETHERTYPE_IP) return; // IPv4 only
         if (hw_len != 6 or proto_len != 4) return;
 
         // Extract addresses
@@ -321,19 +330,52 @@ pub const VirtualTap = struct {
             // Check if request is for us
             if (self.config.our_ip) |our_ip| {
                 if (target_ip == our_ip) {
-                    // TODO: Send ARP reply (requires sending capability)
+                    // Build and queue ARP reply
                     self.stats.arp_replies_sent += 1;
                     if (self.config.verbose) {
-                        std.log.info("[VirtualTap] ARP Request for us (IP: {}.{}.{}.{}), would reply", .{
+                        std.log.info("[VirtualTap] 🎯 ARP Request for us (IP: {}.{}.{}.{}), queueing reply!", .{
                             (target_ip >> 24) & 0xFF,
                             (target_ip >> 16) & 0xFF,
                             (target_ip >> 8) & 0xFF,
                             target_ip & 0xFF,
                         });
                     }
+                    const reply = try self.buildArpReply(sender_mac[0..6].*, sender_ip, our_ip);
+                    try self.arp_reply_queue.append(self.allocator, reply);
                 }
             }
         }
+    }
+
+    /// Build ARP reply packet (Ethernet + ARP)
+    fn buildArpReply(self: *VirtualTap, target_mac: MacAddr, target_ip: u32, our_ip: u32) ![]u8 {
+        // Total: 14 (Ethernet) + 28 (ARP) = 42 bytes minimum, padded to 60
+        const frame_size = 60; // Minimum Ethernet frame size
+        const reply = try self.allocator.alloc(u8, frame_size);
+        @memset(reply, 0); // Zero-fill for padding
+
+        // Ethernet header
+        @memcpy(reply[0..6], &target_mac); // Destination MAC
+        @memcpy(reply[6..12], &self.config.our_mac); // Source MAC
+        std.mem.writeInt(u16, reply[12..14], ETHERTYPE_ARP, .big); // EtherType
+
+        // ARP packet
+        const arp = reply[14..];
+        std.mem.writeInt(u16, arp[0..2], 1, .big); // Hardware type: Ethernet
+        std.mem.writeInt(u16, arp[2..4], ETHERTYPE_IP, .big); // Protocol type: IPv4
+        arp[4] = 6; // Hardware address length
+        arp[5] = 4; // Protocol address length
+        std.mem.writeInt(u16, arp[6..8], ARP_OP_REPLY, .big); // Operation: Reply
+
+        // Sender (us)
+        @memcpy(arp[8..14], &self.config.our_mac); // Sender MAC
+        std.mem.writeInt(u32, arp[14..18], our_ip, .big); // Sender IP
+
+        // Target (requester)
+        @memcpy(arp[18..24], &target_mac); // Target MAC
+        std.mem.writeInt(u32, arp[24..28], target_ip, .big); // Target IP
+
+        return reply;
     }
 
     /// Add ARP entry to table
@@ -342,14 +384,14 @@ pub const VirtualTap = struct {
         for (self.arp_table.items) |*entry| {
             if (entry.ip == ip) {
                 entry.mac = mac;
-                entry.timestamp = std.time.milliTimestamp();
+                entry.timestamp = @intCast(std.time.milliTimestamp());
                 entry.is_static = is_static;
                 return;
             }
         }
 
         // Add new entry
-        try self.arp_table.append(.{
+        try self.arp_table.append(self.allocator, .{
             .ip = ip,
             .mac = mac,
             .timestamp = @intCast(std.time.milliTimestamp()),
@@ -422,6 +464,17 @@ pub const VirtualTap = struct {
     /// Update gateway IP address
     pub fn setGatewayIp(self: *VirtualTap, ip: u32) void {
         self.config.gateway_ip = ip;
+    }
+
+    /// Check if there are pending ARP replies
+    pub fn hasPendingArpReply(self: *const VirtualTap) bool {
+        return self.arp_reply_queue.items.len > 0;
+    }
+
+    /// Pop an ARP reply from the queue (caller owns the memory)
+    pub fn popArpReply(self: *VirtualTap) ?[]u8 {
+        if (self.arp_reply_queue.items.len == 0) return null;
+        return self.arp_reply_queue.orderedRemove(0);
     }
 };
 
