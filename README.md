@@ -36,32 +36,32 @@ VirtualTap provides a **virtual Ethernet adapter** that:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     SoftEther VPN Server                     │
-│                  (Expects Layer 2 Ethernet)                  │
+│                     SoftEther VPN Server                    │
+│                  (Expects Layer 2 Ethernet)                 │
 └──────────────────────────┬──────────────────────────────────┘
                            │ Ethernet Frames (ARP, IP, etc.)
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                        VirtualTap                            │
-│  ┌─────────────────────────────────────────────────────┐   │
+│                        VirtualTap                           │
+│  ┌──────────────────────────────────────────────────────┐   │
 │  │               Virtual Ethernet Layer                 │   │
-│  │  • ARP Table (IP ↔ MAC mapping)                     │   │
-│  │  • ARP Request/Reply Handler                        │   │
-│  │  • MAC Address Generator                            │   │
-│  │  • Broadcast Simulator                              │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                           │                                  │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │            L2 ↔ L3 Translation Engine               │   │
-│  │  • Ethernet Header Add/Strip                        │   │
-│  │  • EtherType Detection (0x0800, 0x0806, 0x86dd)    │   │
-│  │  • Checksum Recalculation                          │   │
-│  └─────────────────────────────────────────────────────┘   │
+│  │  • ARP Table (IP ↔ MAC mapping)                      │   │
+│  │  • ARP Request/Reply Handler                         │   │
+│  │  • MAC Address Generator                             │   │
+│  │  • Broadcast Simulator                               │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                           │                                 │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │            L2 ↔ L3 Translation Engine                │   │
+│  │  • Ethernet Header Add/Strip                         │   │
+│  │  • EtherType Detection (0x0800, 0x0806, 0x86dd)      │   │
+│  │  • Checksum Recalculation                            │   │
+│  └──────────────────────────────────────────────────────┘   │
 └──────────────────────────┬──────────────────────────────────┘
                            │ IP Packets only
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              Platform Layer 3 Interface                      │
+│              Platform Layer 3 Interface                     │
 │  (iOS PacketTunnelProvider / Android VpnService)            │
 └─────────────────────────────────────────────────────────────┘
 ```
