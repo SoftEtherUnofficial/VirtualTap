@@ -518,7 +518,7 @@ test "VirtualTap basic" {
         .handle_arp = true,
         .verbose = false,
     });
-    defer vtap.deinit();
+    defer vtap.deinit(allocator);
 
     // Test IP→Ethernet
     const ip_packet = [_]u8{
