@@ -416,6 +416,19 @@ pub const VirtualTap = struct {
             return false;
         }
 
+        // If this is the gateway IP, automatically set gateway_mac
+        if (self.config.gateway_ip) |gateway_ip| {
+            if (ip == gateway_ip and self.config.learn_gateway_mac) {
+                self.config.gateway_mac = mac;
+                if (self.config.verbose) {
+                    std.log.info("[VirtualTap] 🎯 LEARNED GATEWAY MAC: {x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2} for IP {d}.{d}.{d}.{d}", .{
+                        mac[0],            mac[1],            mac[2],           mac[3],    mac[4], mac[5],
+                        (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF,
+                    });
+                }
+            }
+        }
+
         try self.addArpEntry(ip, mac, false);
         return true;
     }
