@@ -169,4 +169,4 @@ While TapTun provided L2↔L3 translation, VirtualTap is a clean separation:
 
 ## License
 
-Part of SoftEther VPN client project
+Part of Unofficial SoftEther VPN client project
