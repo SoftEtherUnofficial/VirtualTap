@@ -191,6 +191,50 @@ void virtual_tap_set_gateway_ip(
     uint32_t ip
 );
 
+/**
+ * Check if there's a pending ARP reply
+ * 
+ * @param handle VirtualTap handle
+ * @return true if there's a pending ARP reply
+ */
+bool virtual_tap_has_pending_arp_reply(VirtualTapHandle* handle);
+
+/**
+ * Pop (retrieve and remove) a pending ARP reply
+ * 
+ * @param handle VirtualTap handle
+ * @param out_buffer Output buffer for ARP reply frame
+ * @param out_buffer_size Size of output buffer
+ * @return Length of ARP reply frame, 0 if no pending reply, negative on error
+ */
+int virtual_tap_pop_arp_reply(
+    VirtualTapHandle* handle,
+    uint8_t* out_buffer,
+    uint32_t out_buffer_size
+);
+
+/**
+ * Update our IP address
+ * 
+ * @param handle VirtualTap handle
+ * @param ip New IP address (network byte order)
+ */
+void virtual_tap_set_our_ip(
+    VirtualTapHandle* handle,
+    uint32_t ip
+);
+
+/**
+ * Update gateway MAC address
+ * 
+ * @param handle VirtualTap handle
+ * @param mac New gateway MAC address (6 bytes)
+ */
+void virtual_tap_set_gateway_mac(
+    VirtualTapHandle* handle,
+    const uint8_t mac[6]
+);
+
 #ifdef __cplusplus
 }
 #endif
