@@ -110,6 +110,7 @@ pub const VirtualTap = struct {
     stats: Stats,
     arp_table: std.ArrayList(ArpEntry),
     arp_reply_queue: std.ArrayList([]u8), // Queue for generated ARP replies
+    mutex: std.Thread.Mutex, // 🔒 Protect arp_table and arp_reply_queue from concurrent access
 
     /// Initialize VirtualTap
     pub fn init(allocator: Allocator, config: Config) !*VirtualTap {
@@ -122,6 +123,7 @@ pub const VirtualTap = struct {
             .stats = .{},
             .arp_table = .{},
             .arp_reply_queue = .{},
+            .mutex = .{},
         };
 
         try self.arp_table.ensureTotalCapacity(allocator, config.arp_table_size);
@@ -341,6 +343,10 @@ pub const VirtualTap = struct {
                         });
                     }
                     const reply = try self.buildArpReply(sender_mac[0..6].*, sender_ip, our_ip);
+
+                    // 🔒 Protect queue append
+                    self.mutex.lock();
+                    defer self.mutex.unlock();
                     try self.arp_reply_queue.append(self.allocator, reply);
                 }
             }
@@ -380,6 +386,9 @@ pub const VirtualTap = struct {
 
     /// Add ARP entry to table
     pub fn addArpEntry(self: *VirtualTap, ip: u32, mac: MacAddr, is_static: bool) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         // Check if entry already exists
         for (self.arp_table.items) |*entry| {
             if (entry.ip == ip) {
@@ -435,6 +444,9 @@ pub const VirtualTap = struct {
 
     /// Lookup MAC address in ARP table
     pub fn lookupArp(self: *VirtualTap, ip: u32) ?ArpEntry {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         const now = @as(u64, @intCast(std.time.milliTimestamp()));
 
         for (self.arp_table.items) |entry| {
@@ -481,11 +493,19 @@ pub const VirtualTap = struct {
 
     /// Check if there are pending ARP replies
     pub fn hasPendingArpReply(self: *const VirtualTap) bool {
-        return self.arp_reply_queue.items.len > 0;
+        // Note: This is safe for const read, no need for mutex (items.len is atomic read)
+        // But to be extra safe with ArrayList internals, we can cast away const
+        const mutable_self = @constCast(self);
+        mutable_self.mutex.lock();
+        defer mutable_self.mutex.unlock();
+        return mutable_self.arp_reply_queue.items.len > 0;
     }
 
     /// Pop an ARP reply from the queue (caller owns the memory)
     pub fn popArpReply(self: *VirtualTap) ?[]u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         if (self.arp_reply_queue.items.len == 0) return null;
         return self.arp_reply_queue.orderedRemove(0);
     }
