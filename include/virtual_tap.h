@@ -8,6 +8,12 @@
 extern "C" {
 #endif
 
+// Error codes (negative values indicate errors)
+#define VTAP_ERROR_INVALID_PARAMS   -1
+#define VTAP_ERROR_PARSE_FAILED     -2
+#define VTAP_ERROR_BUFFER_TOO_SMALL -3
+#define VTAP_ERROR_ALLOC_FAILED     -4
+
 // Opaque handle
 typedef struct VirtualTap VirtualTap;
 
@@ -100,6 +106,46 @@ bool virtual_tap_has_pending_arp_reply(VirtualTap* tap);
 int32_t virtual_tap_pop_arp_reply(
     VirtualTap* tap,
     uint8_t* arp_reply_out,
+    uint32_t out_capacity
+);
+
+// ============================================================================
+// DHCP Packet Building
+// ============================================================================
+
+/// Build DHCP DISCOVER packet (client broadcasts to find DHCP servers)
+/// Returns length of Ethernet frame (> 0) or negative error code
+/// Caller must provide output buffer of at least 342 bytes
+/// 
+/// @param client_mac MAC address of client (6 bytes)
+/// @param transaction_id DHCP transaction ID (XID)
+/// @param eth_frame_out Output buffer for Ethernet frame
+/// @param out_capacity Size of output buffer (must be >= 342)
+/// @return Length of frame on success, negative error code on failure
+int32_t dhcp_build_discover(
+    const uint8_t* client_mac,
+    uint32_t transaction_id,
+    uint8_t* eth_frame_out,
+    uint32_t out_capacity
+);
+
+/// Build DHCP REQUEST packet (client requests specific IP after receiving OFFER)
+/// Returns length of Ethernet frame (> 0) or negative error code
+/// Caller must provide output buffer of at least 362 bytes
+/// 
+/// @param client_mac MAC address of client (6 bytes)
+/// @param transaction_id DHCP transaction ID (XID) - must match DISCOVER
+/// @param requested_ip IP address to request (network byte order)
+/// @param server_ip DHCP server IP (network byte order, from OFFER)
+/// @param eth_frame_out Output buffer for Ethernet frame
+/// @param out_capacity Size of output buffer (must be >= 362)
+/// @return Length of frame on success, negative error code on failure
+int32_t dhcp_build_request(
+    const uint8_t* client_mac,
+    uint32_t transaction_id,
+    uint32_t requested_ip,
+    uint32_t server_ip,
+    uint8_t* eth_frame_out,
     uint32_t out_capacity
 );
 
