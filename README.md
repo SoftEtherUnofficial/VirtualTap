@@ -91,18 +91,17 @@ virtual_tap_destroy(tap);
 ### Components
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   VirtualTap                        │
-│                                                     │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │
-│  │ ARP Handler  │  │ L2↔L3 Trans- │  │  DHCP    │ │
-│  │              │  │    lator     │  │  Parser  │ │
-│  │ • ARP table  │  │ • IP→Eth     │  │ • Learn  │ │
-│  │ • Parse ARP  │  │ • Eth→IP     │  │   IP     │ │
-│  │ • Build ARP  │  │ • Learn MAC  │  │ • Learn  │ │
-│  │   replies    │  │ • Gateway    │  │   gateway│ │
-│  └──────────────┘  └──────────────┘  └──────────┘ │
-└─────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│                   VirtualTap                       │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐  │
+│  │ ARP Handler  │  │ L2↔L3 Trans- │  │  DHCP    │  │
+│  │              │  │    lator     │  │  Parser  │  │
+│  │ • ARP table  │  │ • IP→Eth     │  │ • Learn  │  │
+│  │ • Parse ARP  │  │ • Eth→IP     │  │   IP     │  │
+│  │ • Build ARP  │  │ • Learn MAC  │  │ • Learn  │  │
+│  │   replies    │  │ • Gateway    │  │   gateway│  │
+│  └──────────────┘  └──────────────┘  └──────────┘  │
+└────────────────────────────────────────────────────┘
            ↑                                 ↓
     Ethernet frames                     IP packets
   (from VPN server)                  (to/from mobile OS)
