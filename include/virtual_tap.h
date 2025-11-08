@@ -20,6 +20,7 @@ typedef struct {
     bool handle_arp;
     bool learn_ip;
     bool learn_gateway_mac;
+    bool enable_dns_cache;     // Enable DNS caching (default: true)
     bool verbose;
 } VirtualTapConfig;
 
@@ -34,6 +35,9 @@ typedef struct {
     uint64_t arp_packets;
     uint64_t icmpv6_packets;
     uint64_t dhcp_packets;
+    uint64_t dns_queries;
+    uint64_t dns_cache_hits;
+    uint64_t dns_cache_misses;
     uint64_t arp_table_entries;
     uint64_t other_packets;
 } VirtualTapStats;

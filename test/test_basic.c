@@ -3,6 +3,7 @@
 #include <assert.h>
 #include "../include/virtual_tap.h"
 #include "../include/icmpv6_handler.h"
+#include "../include/dns_handler.h"
 
 void test_create_destroy() {
     printf("Test 1: Create and destroy... ");
@@ -14,7 +15,8 @@ void test_create_destroy() {
         .handle_arp = true,
         .learn_ip = true,
         .learn_gateway_mac = true,
-        .verbose = false
+        .verbose = false,
+        .enable_dns_cache = true
     };
     memset(config.gateway_mac, 0, 6);
     
@@ -35,7 +37,8 @@ void test_ip_to_ethernet() {
         .handle_arp = true,
         .learn_ip = true,
         .learn_gateway_mac = true,
-        .verbose = false
+        .verbose = false,
+        .enable_dns_cache = true
     };
     memset(config.gateway_mac, 0, 6);
     
@@ -81,7 +84,8 @@ void test_ethernet_to_ip() {
         .handle_arp = true,
         .learn_ip = true,
         .learn_gateway_mac = true,
-        .verbose = false
+        .verbose = false,
+        .enable_dns_cache = true
     };
     memset(config.gateway_mac, 0, 6);
     
@@ -130,7 +134,8 @@ void test_arp_handling() {
         .handle_arp = true,
         .learn_ip = false,
         .learn_gateway_mac = true,
-        .verbose = false
+        .verbose = false,
+        .enable_dns_cache = true
     };
     memset(config.gateway_mac, 0, 6);
     
@@ -197,7 +202,8 @@ void test_ipv6_to_ethernet() {
         .handle_arp = true,
         .learn_ip = true,
         .learn_gateway_mac = true,
-        .verbose = false
+        .verbose = false,
+        .enable_dns_cache = true
     };
     memset(config.gateway_mac, 0, 6);
     
@@ -246,7 +252,8 @@ void test_ipv6_from_ethernet() {
         .handle_arp = true,
         .learn_ip = true,
         .learn_gateway_mac = true,
-        .verbose = false
+        .verbose = false,
+        .enable_dns_cache = true
     };
     memset(config.gateway_mac, 0, 6);
     
@@ -457,6 +464,86 @@ void test_icmpv6_neighbor_advertisement() {
     printf("✅\n");
 }
 
+void test_dns_query_parsing() {
+    printf("Test 10: DNS query parsing... ");
+    
+    // Build minimal DNS query for google.com A record
+    uint8_t udp_packet[48] = {
+        // UDP header
+        0xC0, 0x01,  // Source port 49153
+        0x00, 0x35,  // Dest port 53 (DNS)
+        0x00, 0x28,  // Length 40
+        0x00, 0x00,  // Checksum
+        
+        // DNS header
+        0x12, 0x34,  // Transaction ID
+        0x01, 0x00,  // Flags: standard query
+        0x00, 0x01,  // QDCOUNT = 1
+        0x00, 0x00,  // ANCOUNT = 0
+        0x00, 0x00,  // NSCOUNT = 0
+        0x00, 0x00,  // ARCOUNT = 0
+        
+        // Query: google.com
+        0x06, 'g', 'o', 'o', 'g', 'l', 'e',
+        0x03, 'c', 'o', 'm',
+        0x00,
+        
+        0x00, 0x01,  // Type A
+        0x00, 0x01   // Class IN
+    };
+    
+    assert(dns_is_query(udp_packet, sizeof(udp_packet)) == true);
+    
+    DnsQuery query;
+    assert(dns_parse_query(udp_packet, sizeof(udp_packet), &query) == true);
+    assert(query.valid == true);
+    assert(query.transaction_id == 0x1234);
+    assert(query.type == 1);  // A record
+    assert(strcmp(query.name, "google.com") == 0);
+    
+    printf("✅\n");
+}
+
+void test_dns_cache() {
+    printf("Test 11: DNS cache operations... ");
+    
+    DnsCache* cache = dns_cache_create();
+    assert(cache != NULL);
+    
+    // Build fake DNS response
+    uint8_t response[64] = {
+        0x12, 0x34,  // Transaction ID
+        0x81, 0x80,  // Response flags
+        0x00, 0x01,  // QDCOUNT
+        0x00, 0x01,  // ANCOUNT
+        0x00, 0x00, 0x00, 0x00,  // NSCOUNT, ARCOUNT
+    };
+    
+    // Insert into cache
+    dns_cache_insert(cache, "example.com", DNS_TYPE_A, response, 64, 300);
+    
+    // Look up (should hit)
+    uint8_t cached_response[128];
+    int32_t len = dns_cache_lookup(cache, "example.com", DNS_TYPE_A, 
+                                   cached_response, sizeof(cached_response));
+    assert(len == 64);
+    assert(memcmp(cached_response, response, 64) == 0);
+    
+    // Look up different name (should miss)
+    len = dns_cache_lookup(cache, "notfound.com", DNS_TYPE_A,
+                          cached_response, sizeof(cached_response));
+    assert(len == 0);
+    
+    // Get stats
+    uint32_t valid, expired;
+    dns_cache_stats(cache, &valid, &expired);
+    assert(valid == 1);
+    assert(expired == 0);
+    
+    dns_cache_destroy(cache);
+    printf("✅\n");
+}
+
 int main() {
     printf("=== VirtualTap C Implementation Tests ===\n\n");
     
@@ -469,6 +556,8 @@ int main() {
     test_icmpv6_ra_parsing();
     test_icmpv6_neighbor_solicitation();
     test_icmpv6_neighbor_advertisement();
+    test_dns_query_parsing();
+    test_dns_cache();
     
     printf("\n✅ All tests passed!\n");
     return 0;

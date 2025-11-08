@@ -1,5 +1,6 @@
 #include "../include/virtual_tap_internal.h"
 #include "../include/icmpv6_handler.h"
+#include "../include/dns_handler.h"
 
 // ============================================================================
 // Internal Helper Functions
@@ -182,6 +183,74 @@ static int handle_icmpv6_ndp(VirtualTap* tap, const uint8_t* eth_frame, uint32_t
     return 0;
 }
 
+static int handle_dns_query(VirtualTap* tap, const uint8_t* ip_packet, uint32_t ip_len) {
+    if (!tap || !ip_packet || ip_len < 28) {  // Min: 20 (IP) + 8 (UDP)
+        return 0;
+    }
+    
+    // Check if UDP
+    uint8_t protocol = ip_packet[9];
+    if (protocol != 17) {  // UDP
+        return 0;
+    }
+    
+    // Extract UDP header
+    uint8_t ip_header_len = (ip_packet[0] & 0x0F) * 4;
+    if (ip_header_len < 20 || ip_header_len + 8 > ip_len) {
+        return 0;
+    }
+    
+    const uint8_t* udp_packet = ip_packet + ip_header_len;
+    uint32_t udp_len = ip_len - ip_header_len;
+    
+    // Check if DNS query
+    if (!dns_is_query(udp_packet, udp_len)) {
+        return 0;
+    }
+    
+    tap->stats.dns_queries++;
+    
+    // Parse DNS query
+    DnsQuery query;
+    if (!dns_parse_query(udp_packet, udp_len, &query)) {
+        return 0;
+    }
+    
+    // Check cache if enabled
+    if (!tap->dns_cache) {
+        tap->stats.dns_cache_misses++;
+        return 0;  // Cache disabled, pass through
+    }
+    
+    DnsCache* cache = (DnsCache*)tap->dns_cache;
+    uint8_t cached_response[DNS_MAX_RESPONSE_SIZE];
+    int32_t cached_len = dns_cache_lookup(cache, query.name, query.type,
+                                          cached_response, sizeof(cached_response));
+    
+    if (cached_len > 0) {
+        // Cache hit!
+        tap->stats.dns_cache_hits++;
+        
+        if (tap->config.verbose) {
+            printf("[VirtualTap] DNS cache hit: %s (type %d)\n", query.name, query.type);
+        }
+        
+        // TODO: Build and queue DNS response
+        // For now, just pass through to let server handle it
+        // Full implementation would require UDP response construction
+        
+        return 0;
+    }
+    
+    tap->stats.dns_cache_misses++;
+    
+    if (tap->config.verbose) {
+        printf("[VirtualTap] DNS cache miss: %s (type %d)\n", query.name, query.type);
+    }
+    
+    return 0;  // Pass through to server
+}
+
 // ============================================================================
 // Public API Implementation
 // ============================================================================
@@ -231,6 +300,14 @@ VirtualTap* virtual_tap_create(const VirtualTapConfig* config) {
         translator_set_gateway_mac(tap->translator, config->gateway_mac);
     }
     
+    // Create DNS cache if enabled
+    if (config->enable_dns_cache) {
+        tap->dns_cache = dns_cache_create();
+        // Note: dns_cache can be NULL, we'll check before using
+    } else {
+        tap->dns_cache = NULL;
+    }
+    
     // Initialize queue
     tap->arp_reply_head = NULL;
     tap->arp_reply_tail = NULL;
@@ -247,6 +324,11 @@ VirtualTap* virtual_tap_create(const VirtualTapConfig* config) {
 
 void virtual_tap_destroy(VirtualTap* tap) {
     if (!tap) return;
+    
+    // Free DNS cache
+    if (tap->dns_cache) {
+        dns_cache_destroy((DnsCache*)tap->dns_cache);
+    }
     
     // Free ARP reply queue
     ArpReplyNode* node = tap->arp_reply_head;
@@ -301,16 +383,18 @@ int32_t virtual_tap_ethernet_to_ip(VirtualTap* tap, const uint8_t* eth_frame,
         case ETHERTYPE_IPV4:
             tap->stats.ipv4_packets++;
             
+            // Extract IP packet for inspection
+            const uint8_t* ip_packet = eth_frame + ETHERNET_HEADER_SIZE;
+            uint32_t ip_packet_len = eth_len - ETHERNET_HEADER_SIZE;
+            
             // Check if DHCP
-            if (eth_len >= ETHERNET_HEADER_SIZE + 20 &&
-                dhcp_is_dhcp_packet(eth_frame + ETHERNET_HEADER_SIZE, 
-                                   eth_len - ETHERNET_HEADER_SIZE)) {
+            if (ip_packet_len >= 20 &&
+                dhcp_is_dhcp_packet(ip_packet, ip_packet_len)) {
                 tap->stats.dhcp_packets++;
                 
                 // Parse DHCP to learn IP/gateway
                 DhcpInfo dhcp;
-                if (dhcp_parse_packet(eth_frame + ETHERNET_HEADER_SIZE,
-                                     eth_len - ETHERNET_HEADER_SIZE, &dhcp) == 0) {
+                if (dhcp_parse_packet(ip_packet, ip_packet_len, &dhcp) == 0) {
                     if (tap->config.learn_ip && dhcp.offered_ip[0] != 0) {
                         uint32_t offered = ipv4_to_u32(dhcp.offered_ip);
                         translator_set_our_ip(tap->translator, offered);
@@ -331,6 +415,9 @@ int32_t virtual_tap_ethernet_to_ip(VirtualTap* tap, const uint8_t* eth_frame,
                     }
                 }
             }
+            
+            // Check if DNS query (for caching/stats)
+            handle_dns_query(tap, ip_packet, ip_packet_len);
             
             // Translate to IP
             {
