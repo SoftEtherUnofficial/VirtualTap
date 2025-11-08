@@ -11,7 +11,7 @@
  * - 5-minute cache TTL (respects actual TTL if lower)
  * - Thread-safe operations
  * 
- * Copyright (c) 2025 SoftEther VPN Project
+ * Copyright (c) 2025 SoftEtherUnofficial at GitHub
  */
 
 #ifndef DNS_HANDLER_H

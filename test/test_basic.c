@@ -4,6 +4,8 @@
 #include "../include/virtual_tap.h"
 #include "../include/icmpv6_handler.h"
 #include "../include/dns_handler.h"
+#include "../include/fragment_handler.h"
+#include "../include/icmp_handler.h"
 
 void test_create_destroy() {
     printf("Test 1: Create and destroy... ");
@@ -544,6 +546,166 @@ void test_dns_cache() {
     printf("✅\n");
 }
 
+void test_ipv4_fragmentation() {
+    printf("Test 12: IPv4 fragmentation detection and reassembly... ");
+    
+    FragmentHandler* handler = fragment_handler_create();
+    assert(handler != NULL);
+    
+    // Build first fragment (offset 0, MF=1, payload 24 bytes = 8-byte aligned)
+    uint8_t frag1[44] = {
+        0x45, 0x00, 0x00, 0x2C,  // Version, IHL, TOS, Total Length (44)
+        0x12, 0x34,              // ID
+        0x20, 0x00,              // Flags (MF=1), Offset (0)
+        0x40, 0x11,              // TTL, Protocol (UDP)
+        0x00, 0x00,              // Checksum
+        0xC0, 0xA8, 0x01, 0x0A,  // Source IP: 192.168.1.10
+        0xC0, 0xA8, 0x01, 0x01,  // Dest IP: 192.168.1.1
+        // Payload (24 bytes, 8-byte aligned)
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18
+    };
+    
+    assert(is_ipv4_fragmented(frag1, sizeof(frag1)) == true);
+    
+    uint8_t reassembled[128];
+    int32_t len = fragment_process_ipv4(handler, frag1, sizeof(frag1),
+                                        reassembled, sizeof(reassembled));
+    assert(len == 0);  // More fragments needed
+    
+    // Build second fragment (offset 24 bytes = 3 * 8, MF=0 - last fragment)
+    uint8_t frag2[36] = {
+        0x45, 0x00, 0x00, 0x24,  // Version, IHL, TOS, Total Length (36)
+        0x12, 0x34,              // Same ID
+        0x00, 0x03,              // Flags (MF=0), Offset (24 bytes / 8 = 3)
+        0x40, 0x11,              // TTL, Protocol
+        0x00, 0x00,              // Checksum
+        0xC0, 0xA8, 0x01, 0x0A,  // Source IP
+        0xC0, 0xA8, 0x01, 0x01,  // Dest IP
+        // Payload (16 bytes)
+        0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28
+    };
+    
+    len = fragment_process_ipv4(handler, frag2, sizeof(frag2),
+                                reassembled, sizeof(reassembled));
+    assert(len > 0);  // Should be reassembled now
+    
+    // Check reassembled packet
+    uint16_t total_len = (reassembled[2] << 8) | reassembled[3];
+    assert(total_len == 20 + 24 + 16);  // IP header + frag1 payload + frag2 payload
+    
+    // Verify fragment flags are cleared
+    assert((reassembled[6] & 0x20) == 0);  // MF flag cleared
+    assert(reassembled[7] == 0);           // Offset cleared
+    
+    fragment_handler_destroy(handler);
+    printf("✅\n");
+}
+
+void test_icmp_error_parsing() {
+    printf("Test 13: ICMP error message parsing... ");
+    
+    // Build ICMP Destination Unreachable (type 3) with fragmentation needed (code 4)
+    uint8_t icmp_packet[56] = {
+        // ICMP header
+        0x03,              // Type: Dest Unreachable
+        0x04,              // Code: Fragmentation Needed
+        0x00, 0x00,        // Checksum (unused in test)
+        0x00, 0x00,        // Unused
+        0x05, 0xDC,        // MTU: 1500
+        // Embedded IP header (original packet that triggered the error)
+        0x45, 0x00, 0x00, 0x30,  // Version, IHL, TOS, Total Length
+        0x12, 0x34, 0x00, 0x00,  // ID, Flags, Offset
+        0x40, 0x11,              // TTL, Protocol (UDP)
+        0x00, 0x00,              // Checksum
+        0xC0, 0xA8, 0x01, 0x0A,  // Source IP: 192.168.1.10
+        0x08, 0x08, 0x08, 0x08,  // Dest IP: 8.8.8.8
+        // Embedded UDP header (first 8 bytes)
+        0x04, 0xD2,              // Source Port: 1234
+        0x00, 0x35,              // Dest Port: 53 (DNS)
+        0x00, 0x00, 0x00, 0x00,  // Length, Checksum
+        // Some payload (for completeness)
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00
+    };
+    
+    assert(icmp_is_error(icmp_packet, sizeof(icmp_packet)) == true);
+    
+    ICMPErrorInfo info;
+    assert(icmp_parse_error(icmp_packet, sizeof(icmp_packet), &info) == 0);
+    
+    assert(info.is_error == true);
+    assert(info.type == 3);
+    assert(info.code == 4);
+    assert(info.mtu == 1500);
+    assert(info.embedded_protocol == 17);  // UDP
+    assert(info.embedded_src_ip == 0xC0A8010A);  // 192.168.1.10
+    assert(info.embedded_dst_ip == 0x08080808);  // 8.8.8.8
+    assert(info.embedded_src_port == 1234);
+    assert(info.embedded_dst_port == 53);
+    
+    printf("✅\n");
+}
+
+void test_icmpv6_error_parsing() {
+    printf("Test 14: ICMPv6 error message parsing... ");
+    
+    // Build ICMPv6 Packet Too Big (type 2)
+    uint8_t icmpv6_packet[88] = {
+        // ICMPv6 header
+        0x02,              // Type: Packet Too Big
+        0x00,              // Code: 0
+        0x00, 0x00,        // Checksum (unused in test)
+        0x00, 0x00, 0x05, 0xDC,  // MTU: 1500
+        // Embedded IPv6 header (original packet)
+        0x60, 0x00, 0x00, 0x00,  // Version, Traffic Class, Flow Label
+        0x00, 0x10,              // Payload Length: 16
+        0x11,                    // Next Header: UDP
+        0x40,                    // Hop Limit: 64
+        // Source IPv6: 2001:db8::1
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        // Dest IPv6: 2001:db8::2
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        // Embedded UDP header
+        0x04, 0xD2,              // Source Port: 1234
+        0x00, 0x35,              // Dest Port: 53 (DNS)
+        0x00, 0x10, 0x00, 0x00,  // Length, Checksum
+        // Some payload
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00
+    };
+    
+    assert(icmpv6_is_error(icmpv6_packet, sizeof(icmpv6_packet)) == true);
+    
+    ICMPErrorInfo info;
+    assert(icmpv6_parse_error(icmpv6_packet, sizeof(icmpv6_packet), &info) == 0);
+    
+    assert(info.is_error == true);
+    assert(info.type == 2);
+    assert(info.code == 0);
+    assert(info.mtu == 1500);
+    assert(info.embedded_protocol == 17);  // UDP
+    
+    // Check IPv6 addresses
+    uint8_t expected_src[16] = {0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01};
+    uint8_t expected_dst[16] = {0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02};
+    assert(memcmp(info.embedded_src_ipv6, expected_src, 16) == 0);
+    assert(memcmp(info.embedded_dst_ipv6, expected_dst, 16) == 0);
+    
+    assert(info.embedded_src_port == 1234);
+    assert(info.embedded_dst_port == 53);
+    
+    printf("✅\n");
+}
+
 int main() {
     printf("=== VirtualTap C Implementation Tests ===\n\n");
     
@@ -558,6 +720,9 @@ int main() {
     test_icmpv6_neighbor_advertisement();
     test_dns_query_parsing();
     test_dns_cache();
+    test_ipv4_fragmentation();
+    test_icmp_error_parsing();
+    test_icmpv6_error_parsing();
     
     printf("\n✅ All tests passed!\n");
     return 0;

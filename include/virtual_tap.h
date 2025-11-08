@@ -38,6 +38,11 @@ typedef struct {
     uint64_t dns_queries;
     uint64_t dns_cache_hits;
     uint64_t dns_cache_misses;
+    uint64_t ipv4_fragments;
+    uint64_t ipv6_fragments;
+    uint64_t fragments_reassembled;
+    uint64_t icmp_errors_received;
+    uint64_t icmpv6_errors_received;
     uint64_t arp_table_entries;
     uint64_t other_packets;
 } VirtualTapStats;

@@ -8,7 +8,7 @@ IOS_CFLAGS = -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=15.0
 
 SRCS = src/virtual_tap.c src/arp_handler.c src/translator.c \
        src/dhcp_parser.c src/ip_utils.c src/icmpv6_handler.c \
-       src/dns_handler.c
+       src/dns_handler.c src/fragment_handler.c src/icmp_handler.c
 OBJS = $(SRCS:.c=.o)
 
 .PHONY: all clean test ios

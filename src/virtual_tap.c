@@ -1,6 +1,8 @@
 #include "../include/virtual_tap_internal.h"
 #include "../include/icmpv6_handler.h"
 #include "../include/dns_handler.h"
+#include "../include/fragment_handler.h"
+#include "../include/icmp_handler.h"
 
 // ============================================================================
 // Internal Helper Functions
@@ -308,6 +310,10 @@ VirtualTap* virtual_tap_create(const VirtualTapConfig* config) {
         tap->dns_cache = NULL;
     }
     
+    // Create fragment handler
+    tap->fragment_handler = fragment_handler_create();
+    // Note: fragment_handler can be NULL, we'll check before using
+    
     // Initialize queue
     tap->arp_reply_head = NULL;
     tap->arp_reply_tail = NULL;
@@ -328,6 +334,11 @@ void virtual_tap_destroy(VirtualTap* tap) {
     // Free DNS cache
     if (tap->dns_cache) {
         dns_cache_destroy((DnsCache*)tap->dns_cache);
+    }
+    
+    // Free fragment handler
+    if (tap->fragment_handler) {
+        fragment_handler_destroy((FragmentHandler*)tap->fragment_handler);
     }
     
     // Free ARP reply queue
@@ -425,6 +436,62 @@ int32_t virtual_tap_ethernet_to_ip(VirtualTap* tap, const uint8_t* eth_frame,
                                                       ip_packet_out, out_capacity);
                 if (result > 0) {
                     tap->stats.eth_to_ip_packets++;
+                    
+                    // Check if fragmented
+                    if (tap->fragment_handler && is_ipv4_fragmented(ip_packet_out, result)) {
+                        tap->stats.ipv4_fragments++;
+                        
+                        // Process fragment
+                        uint8_t reassembled[MAX_PACKET_SIZE];
+                        int32_t reassembled_len = fragment_process_ipv4(
+                            (FragmentHandler*)tap->fragment_handler,
+                            ip_packet_out, result,
+                            reassembled, sizeof(reassembled)
+                        );
+                        
+                        if (reassembled_len > 0) {
+                            // Reassembly complete!
+                            tap->stats.fragments_reassembled++;
+                            
+                            if (reassembled_len <= (int32_t)out_capacity) {
+                                memcpy(ip_packet_out, reassembled, reassembled_len);
+                                return reassembled_len;
+                            }
+                        } else if (reassembled_len == 0) {
+                            // More fragments needed - don't return packet yet
+                            return 0;
+                        }
+                        // reassembled_len < 0 means error, fall through to return original
+                    }
+                    
+                    // Check for ICMP error messages
+                    if (result >= 20) {
+                        uint8_t protocol = ip_packet_out[9];
+                        if (protocol == 1) {  // ICMP
+                            uint8_t ihl = (ip_packet_out[0] & 0x0F) * 4;
+                            if (result >= (int)(ihl + 8)) {
+                                const uint8_t* icmp_packet = ip_packet_out + ihl;
+                                uint32_t icmp_len = result - ihl;
+                                
+                                if (icmp_is_error(icmp_packet, icmp_len)) {
+                                    tap->stats.icmp_errors_received++;
+                                    
+                                    // Parse error for logging/debugging
+                                    if (tap->config.verbose) {
+                                        ICMPErrorInfo info;
+                                        if (icmp_parse_error(icmp_packet, icmp_len, &info) == 0) {
+                                            printf("[VirtualTap] ICMP error: type=%d code=%d", 
+                                                   info.type, info.code);
+                                            if (info.mtu > 0) {
+                                                printf(" MTU=%d", info.mtu);
+                                            }
+                                            printf("\n");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 return result;
             }
@@ -451,6 +518,60 @@ int32_t virtual_tap_ethernet_to_ip(VirtualTap* tap, const uint8_t* eth_frame,
                                                       ip_packet_out, out_capacity);
                 if (result > 0) {
                     tap->stats.eth_to_ip_packets++;
+                    
+                    // Check if fragmented
+                    if (tap->fragment_handler && is_ipv6_fragmented(ip_packet_out, result)) {
+                        tap->stats.ipv6_fragments++;
+                        
+                        // Process fragment
+                        uint8_t reassembled[MAX_PACKET_SIZE];
+                        int32_t reassembled_len = fragment_process_ipv6(
+                            (FragmentHandler*)tap->fragment_handler,
+                            ip_packet_out, result,
+                            reassembled, sizeof(reassembled)
+                        );
+                        
+                        if (reassembled_len > 0) {
+                            // Reassembly complete!
+                            tap->stats.fragments_reassembled++;
+                            
+                            if (reassembled_len <= (int32_t)out_capacity) {
+                                memcpy(ip_packet_out, reassembled, reassembled_len);
+                                return reassembled_len;
+                            }
+                        } else if (reassembled_len == 0) {
+                            // More fragments needed
+                            return 0;
+                        }
+                    }
+                    
+                    // Check for ICMPv6 error messages
+                    if (result >= 40) {
+                        uint8_t next_header = ip_packet_out[6];
+                        if (next_header == 58) {  // ICMPv6
+                            if (result >= 40 + 8) {
+                                const uint8_t* icmpv6_packet = ip_packet_out + 40;
+                                uint32_t icmpv6_len = result - 40;
+                                
+                                if (icmpv6_is_error(icmpv6_packet, icmpv6_len)) {
+                                    tap->stats.icmpv6_errors_received++;
+                                    
+                                    // Parse error for logging/debugging
+                                    if (tap->config.verbose) {
+                                        ICMPErrorInfo info;
+                                        if (icmpv6_parse_error(icmpv6_packet, icmpv6_len, &info) == 0) {
+                                            printf("[VirtualTap] ICMPv6 error: type=%d code=%d", 
+                                                   info.type, info.code);
+                                            if (info.mtu > 0) {
+                                                printf(" MTU=%d", info.mtu);
+                                            }
+                                            printf("\n");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 return result;
             }

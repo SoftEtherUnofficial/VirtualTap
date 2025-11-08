@@ -5,7 +5,7 @@
  * - Router Advertisement (RA) parsing for IPv6 auto-configuration
  * - Neighbor Advertisement (NA) responses for address resolution
  * 
- * Copyright (c) 2025 SoftEther VPN Project
+ * Copyright (c) 2025 SoftEtherUnofficial at GitHub
  */
 
 #include "icmpv6_handler.h"

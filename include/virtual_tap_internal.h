@@ -139,6 +139,7 @@ struct VirtualTap {
     ArpTable* arp_table;
     Translator* translator;
     void* dns_cache;  // DnsCache* (forward declared to avoid circular dependency)
+    void* fragment_handler;  // FragmentHandler* (forward declared)
     ArpReplyNode* arp_reply_head;
     ArpReplyNode* arp_reply_tail;
     VirtualTapStats stats;

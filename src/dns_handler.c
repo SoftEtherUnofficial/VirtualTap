@@ -3,7 +3,7 @@
  * 
  * DNS query/response interception and caching for VPN clients.
  * 
- * Copyright (c) 2025 SoftEther VPN Project
+ * Copyright (c) 2025 SoftEtherUnofficial at GitHub
  */
 
 #include "dns_handler.h"
