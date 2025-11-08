@@ -154,23 +154,27 @@ VPN Server (ARP reply)
   - **Router Advertisement**: Parses RA packets to learn IPv6 gateway and network prefix
   - **Gateway Learning**: Learns gateway MAC from IPv6 traffic
 - **ARP**: Complete request/reply handling with timeout
+- **DNS**: Query parsing with LRU cache (256 entries, 5-minute TTL)
+- **Fragmentation**: IPv4 and IPv6 fragment reassembly (16 chains each, 30-second timeout)
+- **ICMP Errors**: Parse ICMP/ICMPv6 error messages for MTU discovery and diagnostics
 
 ### ✅ Smart Learning
 - **IP Address**: Learned from outgoing packet source fields
 - **Gateway MAC**: Learned from incoming packet source MAC
 - **DHCP Config**: Extracts IP, gateway, subnet, DNS from DHCP OFFER/ACK
+- **IPv6 RA Config**: Extracts prefix, gateway, and DNS from Router Advertisement
+
+### ✅ Performance Features
+- **DNS Caching**: LRU cache with 256 entries, reduces latency for repeated queries
+- **Fragment Reassembly**: Handles large packets split by routers (>MTU)
+- **Zero-Copy Design**: Caller-provided buffers, no internal allocations
+- **Minimal Overhead**: ~50-70 µs per packet on modern hardware
 
 ### ✅ ARP Table
 - Fixed-size (64 entries)
 - Automatic timeout (5 minutes default)
 - Static entry support
 - Linear search (fast for small tables)
-
-### ✅ Zero-Copy Design
-- Caller-provided buffers
-- No internal allocations for packets
-- Minimal memory overhead
-- Optimal for mobile battery life
 
 ### ✅ Thread-Safe
 - No global mutable state
@@ -247,17 +251,25 @@ void virtual_tap_get_stats(VirtualTap* tap, VirtualTapStats* stats);
 
 ```c
 typedef struct {
-    uint64_t ip_to_eth_packets;     // IP → Ethernet conversions
-    uint64_t eth_to_ip_packets;     // Ethernet → IP conversions
-    uint64_t arp_requests_handled;  // ARP requests answered
-    uint64_t arp_replies_sent;      // ARP replies sent to server
-    uint64_t ipv4_packets;          // IPv4 packets processed
-    uint64_t ipv6_packets;          // IPv6 packets processed
-    uint64_t icmpv6_packets;        // ICMPv6 NDP packets (NS/NA/RA)
-    uint64_t arp_packets;           // ARP packets processed
-    uint64_t dhcp_packets;          // DHCP packets parsed
-    uint64_t arp_table_entries;     // Current ARP table size
-    uint64_t other_packets;         // Unknown protocol packets
+    uint64_t ip_to_eth_packets;      // IP → Ethernet conversions
+    uint64_t eth_to_ip_packets;      // Ethernet → IP conversions
+    uint64_t arp_requests_handled;   // ARP requests answered
+    uint64_t arp_replies_sent;       // ARP replies sent to server
+    uint64_t ipv4_packets;           // IPv4 packets processed
+    uint64_t ipv6_packets;           // IPv6 packets processed
+    uint64_t icmpv6_packets;         // ICMPv6 NDP packets (NS/NA/RA)
+    uint64_t arp_packets;            // ARP packets processed
+    uint64_t dhcp_packets;           // DHCP packets parsed
+    uint64_t dns_queries;            // DNS queries intercepted
+    uint64_t dns_cache_hits;         // DNS cache hits
+    uint64_t dns_cache_misses;       // DNS cache misses
+    uint64_t ipv4_fragments;         // IPv4 fragments received
+    uint64_t ipv6_fragments;         // IPv6 fragments received
+    uint64_t fragments_reassembled;  // Fragment chains reassembled
+    uint64_t icmp_errors_received;   // ICMP error messages
+    uint64_t icmpv6_errors_received; // ICMPv6 error messages
+    uint64_t arp_table_entries;      // Current ARP table size
+    uint64_t other_packets;          // Unknown protocol packets
 } VirtualTapStats;
 ```
 
@@ -265,17 +277,24 @@ typedef struct {
 
 ## Performance
 
-**Memory Footprint:**
+**Memory Footprint (v0.4.0):**
 - VirtualTap instance: ~8KB
 - ARP table: ~4KB (64 entries)
+- DNS cache: ~16KB (256 entries)
+- Fragment handlers: ~2.2MB (32 chains × 65KB buffers)
 - ARP reply queue: ~500 bytes (typical)
-- **Total:** ~12KB per instance
+- **Total:** ~2.3MB per instance
 
 **CPU Performance:**
 - IP → Ethernet: < 5μs per packet
 - Ethernet → IP: < 5μs per packet
+- DNS cache lookup: < 2μs
+- Fragment check: < 1μs
+- Fragment reassembly: < 50μs (when complete)
 - ARP lookup: < 1μs (64 entries)
 - ARP reply build: < 10μs
+- RA parsing: ~80μs
+- NA response: ~55μs
 
 ---
 
@@ -286,18 +305,28 @@ typedef struct {
 ```
 VirtualTap/
 ├── include/
-│   ├── virtual_tap.h           # Public API (99 lines)
-│   ├── virtual_tap_internal.h  # Internal structures (191 lines)
-│   └── icmpv6_handler.h        # ICMPv6 NDP API (105 lines)
+│   ├── virtual_tap.h           # Public API (111 lines)
+│   ├── virtual_tap_internal.h  # Internal structures (198 lines)
+│   ├── icmpv6_handler.h        # ICMPv6 NDP API (105 lines)
+│   ├── dns_handler.h           # DNS caching API (96 lines)
+│   ├── fragment_handler.h      # Fragmentation API (155 lines)
+│   └── icmp_handler.h          # ICMP error parsing (108 lines)
 ├── src/
-│   ├── virtual_tap.c           # Main module (435 lines)
+│   ├── virtual_tap.c           # Main module (635 lines)
 │   ├── arp_handler.c           # ARP protocol (209 lines)
 │   ├── translator.c            # L2↔L3 translation (245 lines)
 │   ├── dhcp_parser.c           # DHCP parsing (132 lines)
 │   ├── ip_utils.c              # IP utilities (69 lines)
-│   └── icmpv6_handler.c        # ICMPv6 NDP handling (255 lines)
+│   ├── icmpv6_handler.c        # ICMPv6 NDP handling (255 lines)
+│   ├── dns_handler.c           # DNS handler with LRU cache (350 lines)
+│   ├── fragment_handler.c      # IP fragmentation (355 lines)
+│   └── icmp_handler.c          # ICMP error parsing (158 lines)
 ├── test/
-│   └── test_basic.c            # Unit tests (476 lines)
+│   └── test_basic.c            # 14 unit tests (727 lines)
+└── Makefile                     # Build system (43 lines)
+```
+
+**Total Lines of Code: ~3,200**
 ├── Makefile                    # Build system
 ├── README.md                   # This file
 └── ROADMAP.md                  # Development roadmap
