@@ -32,6 +32,13 @@
 #define ARP_OP_REQUEST 1
 #define ARP_OP_REPLY 2
 
+// ICMPv6 / NDP (Neighbor Discovery Protocol)
+#define ICMPV6_PROTOCOL 58
+#define ICMPV6_NEIGHBOR_SOLICITATION 135
+#define ICMPV6_NEIGHBOR_ADVERTISEMENT 136
+#define ICMPV6_ROUTER_SOLICITATION 133
+#define ICMPV6_ROUTER_ADVERTISEMENT 134
+
 // Utility macros
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -96,9 +103,16 @@ typedef struct ArpReplyNode {
 // Translator structure
 typedef struct {
     uint8_t our_mac[6];
-    uint32_t our_ip;
-    uint32_t gateway_ip;
+    uint32_t our_ip;                // IPv4 address
+    uint32_t gateway_ip;            // IPv4 gateway
     uint8_t gateway_mac[6];
+    
+    // IPv6 support
+    uint8_t our_ipv6[16];           // IPv6 address
+    uint8_t gateway_ipv6[16];       // IPv6 gateway
+    bool has_ipv6;
+    bool has_ipv6_gateway;
+    
     int64_t last_gateway_learn_ms;
     bool handle_arp;
     bool learn_gateway_mac;
@@ -164,5 +178,8 @@ int dhcp_parse_packet(const uint8_t* ip_packet, uint32_t len, DhcpInfo* info);
 uint32_t ipv4_to_u32(const uint8_t ip[4]);
 void u32_to_ipv4(uint32_t ip, uint8_t out[4]);
 uint32_t extract_dest_ip_from_packet(const uint8_t* ip_packet, uint32_t len);
+void extract_ipv6_address(const uint8_t* ipv6_packet, uint32_t offset, uint8_t out[16]);
+bool is_ipv6_link_local(const uint8_t ipv6[16]);
+bool is_icmpv6_ndp(const uint8_t* ipv6_packet, uint32_t len);
 
 #endif // VIRTUAL_TAP_INTERNAL_H

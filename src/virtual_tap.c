@@ -264,6 +264,19 @@ int32_t virtual_tap_ethernet_to_ip(VirtualTap* tap, const uint8_t* eth_frame,
             return handle_arp(tap, eth_frame, eth_len);
             
         case ETHERTYPE_IPV6:
+            tap->stats.ipv6_packets++;
+            
+            // Check if ICMPv6 NDP (Neighbor Discovery Protocol)
+            if (eth_len >= ETHERNET_HEADER_SIZE + 40 &&
+                is_icmpv6_ndp(eth_frame + ETHERNET_HEADER_SIZE, eth_len - ETHERNET_HEADER_SIZE)) {
+                tap->stats.icmpv6_packets++;
+                if (tap->config.verbose) {
+                    printf("[VirtualTap] Detected ICMPv6 NDP packet\n");
+                }
+                // Note: NDP handling can be added here if needed
+                // For now, pass through to translator
+            }
+            
             {
                 int result = translator_ethernet_to_ip(tap->translator, eth_frame, eth_len,
                                                       ip_packet_out, out_capacity);

@@ -186,6 +186,107 @@ void test_arp_handling() {
     printf("✅\n");
 }
 
+void test_ipv6_to_ethernet() {
+    printf("Test 5: IPv6 to Ethernet conversion... ");
+    
+    VirtualTapConfig config = {
+        .our_mac = {0x02, 0x00, 0x5E, 0x10, 0x20, 0x30},
+        .our_ip = 0,
+        .gateway_ip = 0,
+        .handle_arp = true,
+        .learn_ip = true,
+        .learn_gateway_mac = true,
+        .verbose = false
+    };
+    memset(config.gateway_mac, 0, 6);
+    
+    VirtualTap* tap = virtual_tap_create(&config);
+    assert(tap != NULL);
+    
+    // Simple IPv6 packet (40 bytes minimum header)
+    uint8_t ipv6_packet[40] = {
+        0x60, 0x00, 0x00, 0x00,  // Version, Traffic Class, Flow Label
+        0x00, 0x00, 0x3B, 0x40,  // Payload Length, Next Header (no next), Hop Limit
+        // Source IPv6: 2001:db8::1
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        // Dest IPv6: 2001:db8::2
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02
+    };
+    
+    uint8_t eth_frame[2048];
+    int32_t result = virtual_tap_ip_to_ethernet(tap, ipv6_packet, 40, eth_frame, sizeof(eth_frame));
+    
+    assert(result == 54);  // 40 + 14
+    
+    // Check Ethernet header
+    assert(eth_frame[12] == 0x86 && eth_frame[13] == 0xDD);  // EtherType IPv6
+    assert(eth_frame[6] == 0x02 && eth_frame[11] == 0x30);   // Source MAC
+    
+    // Check IPv6 packet is intact
+    assert(memcmp(eth_frame + 14, ipv6_packet, 40) == 0);
+    
+    VirtualTapStats stats;
+    virtual_tap_get_stats(tap, &stats);
+    assert(stats.ip_to_eth_packets == 1);
+    
+    virtual_tap_destroy(tap);
+    printf("✅\n");
+}
+
+void test_ipv6_from_ethernet() {
+    printf("Test 6: IPv6 from Ethernet extraction... ");
+    
+    VirtualTapConfig config = {
+        .our_mac = {0x02, 0x00, 0x5E, 0x10, 0x20, 0x30},
+        .our_ip = 0,
+        .gateway_ip = 0,
+        .handle_arp = true,
+        .learn_ip = true,
+        .learn_gateway_mac = true,
+        .verbose = false
+    };
+    memset(config.gateway_mac, 0, 6);
+    
+    VirtualTap* tap = virtual_tap_create(&config);
+    assert(tap != NULL);
+    
+    // Ethernet frame with IPv6 packet
+    uint8_t eth_frame[54] = {
+        // Ethernet header
+        0x02, 0x00, 0x5E, 0x10, 0x20, 0x30,  // Dest MAC
+        0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,  // Src MAC
+        0x86, 0xDD,                          // EtherType IPv6
+        // IPv6 packet
+        0x60, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x3B, 0x40,
+        // Source IPv6
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        // Dest IPv6
+        0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02
+    };
+    
+    uint8_t ip_packet[2048];
+    int32_t result = virtual_tap_ethernet_to_ip(tap, eth_frame, 54, ip_packet, sizeof(ip_packet));
+    
+    assert(result == 40);  // 54 - 14
+    
+    // Check IPv6 packet
+    assert(ip_packet[0] == 0x60);  // Version 6
+    assert(memcmp(ip_packet, eth_frame + 14, 40) == 0);
+    
+    VirtualTapStats stats;
+    virtual_tap_get_stats(tap, &stats);
+    assert(stats.eth_to_ip_packets == 1);
+    assert(stats.ipv6_packets == 1);
+    
+    virtual_tap_destroy(tap);
+    printf("✅\n");
+}
+
 int main() {
     printf("=== VirtualTap C Implementation Tests ===\n\n");
     
@@ -193,6 +294,8 @@ int main() {
     test_ip_to_ethernet();
     test_ethernet_to_ip();
     test_arp_handling();
+    test_ipv6_to_ethernet();
+    test_ipv6_from_ethernet();
     
     printf("\n✅ All tests passed!\n");
     return 0;

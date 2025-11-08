@@ -30,7 +30,9 @@ typedef struct {
     uint64_t arp_requests_handled;
     uint64_t arp_replies_sent;
     uint64_t ipv4_packets;
+    uint64_t ipv6_packets;
     uint64_t arp_packets;
+    uint64_t icmpv6_packets;
     uint64_t dhcp_packets;
     uint64_t arp_table_entries;
     uint64_t other_packets;

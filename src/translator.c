@@ -15,6 +15,10 @@ Translator* translator_create(const uint8_t our_mac[6], bool handle_arp,
     t->our_ip = 0;
     t->gateway_ip = 0;
     memset(t->gateway_mac, 0, 6);
+    memset(t->our_ipv6, 0, 16);
+    memset(t->gateway_ipv6, 0, 16);
+    t->has_ipv6 = false;
+    t->has_ipv6_gateway = false;
     t->last_gateway_learn_ms = 0;
     t->handle_arp = handle_arp;
     t->learn_gateway_mac = learn_gateway_mac;
@@ -57,11 +61,23 @@ int translator_ip_to_ethernet(Translator* t, const uint8_t* ip_packet, uint32_t 
         if (ip_len >= 20 && t->our_ip == 0) {
             t->our_ip = read_u32_be(ip_packet + 12);
             if (t->verbose) {
-                printf("[Translator] Learned our IP from outgoing packet\n");
+                printf("[Translator] Learned our IPv4 from outgoing packet\n");
             }
         }
     } else if (version == 6) {
         ethertype = ETHERTYPE_IPV6;
+        
+        // Learn our IPv6 from source address (bytes 8-23)
+        if (ip_len >= 40 && !t->has_ipv6) {
+            extract_ipv6_address(ip_packet, 8, t->our_ipv6);
+            // Don't learn link-local addresses as primary
+            if (!is_ipv6_link_local(t->our_ipv6)) {
+                t->has_ipv6 = true;
+                if (t->verbose) {
+                    printf("[Translator] Learned our IPv6 from outgoing packet\n");
+                }
+            }
+        }
     } else {
         return VTAP_ERROR_PARSE_FAILED;
     }
@@ -130,7 +146,30 @@ int translator_ethernet_to_ip(Translator* t, const uint8_t* eth_frame, uint32_t 
                     memcpy(t->gateway_mac, src_mac, 6);
                     t->last_gateway_learn_ms = get_time_ms();
                     if (t->verbose) {
-                        printf("[Translator] Learned gateway MAC from incoming packet\n");
+                        printf("[Translator] Learned gateway MAC from incoming IPv4 packet\n");
+                    }
+                }
+            }
+        }
+        
+        // Check if source IPv6 matches gateway
+        if (ethertype == ETHERTYPE_IPV6 && eth_len >= ETHERNET_HEADER_SIZE + 40 && t->has_ipv6_gateway) {
+            uint8_t src_ipv6[16];
+            extract_ipv6_address(eth_frame + ETHERNET_HEADER_SIZE, 8, src_ipv6);
+            if (memcmp(src_ipv6, t->gateway_ipv6, 16) == 0) {
+                const uint8_t* src_mac = eth_frame + 6;
+                bool different = false;
+                for (int i = 0; i < 6; i++) {
+                    if (t->gateway_mac[i] != src_mac[i]) {
+                        different = true;
+                        break;
+                    }
+                }
+                if (different) {
+                    memcpy(t->gateway_mac, src_mac, 6);
+                    t->last_gateway_learn_ms = get_time_ms();
+                    if (t->verbose) {
+                        printf("[Translator] Learned gateway MAC from incoming IPv6 packet\n");
                     }
                 }
             }
