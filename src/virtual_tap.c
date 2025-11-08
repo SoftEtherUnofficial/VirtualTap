@@ -1,4 +1,5 @@
 #include "../include/virtual_tap_internal.h"
+#include "../include/icmpv6_handler.h"
 
 // ============================================================================
 // Internal Helper Functions
@@ -91,6 +92,91 @@ static int handle_arp(VirtualTap* tap, const uint8_t* eth_frame, uint32_t eth_le
         }
         
         return 0;
+    }
+    
+    return 0;
+}
+
+static int handle_icmpv6_ndp(VirtualTap* tap, const uint8_t* eth_frame, uint32_t eth_len) {
+    if (!tap || !eth_frame || eth_len < ETHERNET_HEADER_SIZE + 64) {
+        return 0;  // Too small for NS
+    }
+    
+    const uint8_t* ipv6_packet = eth_frame + ETHERNET_HEADER_SIZE;
+    uint32_t ipv6_len = eth_len - ETHERNET_HEADER_SIZE;
+    
+    // Check for Neighbor Solicitation (asking for our IPv6)
+    uint8_t target_ipv6[16];
+    if (is_neighbor_solicitation(ipv6_packet, ipv6_len, target_ipv6)) {
+        // Check if solicitation is for our IPv6
+        uint8_t our_ipv6[16];
+        memcpy(our_ipv6, tap->translator->our_ipv6, 16);
+        
+        if (tap->translator->has_ipv6 && memcmp(target_ipv6, our_ipv6, 16) == 0) {
+            // Build Neighbor Advertisement response
+            uint8_t solicitor_ipv6[16];
+            memcpy(solicitor_ipv6, ipv6_packet + 8, 16);  // Source IPv6
+            
+            uint8_t* na_packet = (uint8_t*)malloc(72);  // IPv6 + NA
+            if (!na_packet) {
+                return VTAP_ERROR_ALLOC_FAILED;
+            }
+            
+            int32_t result = build_neighbor_advertisement(
+                our_ipv6,
+                tap->config.our_mac,
+                solicitor_ipv6,
+                na_packet,
+                72
+            );
+            
+            if (result == 72) {
+                // Queue NA response (needs Ethernet wrapping)
+                uint8_t* eth_reply = (uint8_t*)malloc(86);  // 14 + 72
+                if (eth_reply) {
+                    // Build Ethernet header
+                    memcpy(eth_reply, eth_frame + 6, 6);      // Dest: sender MAC
+                    memcpy(eth_reply + 6, tap->config.our_mac, 6);  // Src: our MAC
+                    eth_reply[12] = 0x86;  // EtherType IPv6
+                    eth_reply[13] = 0xDD;
+                    memcpy(eth_reply + 14, na_packet, 72);
+                    
+                    arp_reply_queue_push(tap, eth_reply, 86);
+                    tap->stats.icmpv6_packets++;
+                    
+                    if (tap->config.verbose) {
+                        printf("[VirtualTap] Sent Neighbor Advertisement response\n");
+                    }
+                }
+                free(na_packet);
+                return 0;
+            }
+            free(na_packet);
+        }
+    }
+    
+    // Check for Router Advertisement (IPv6 config)
+    const uint8_t* icmpv6 = ipv6_packet + 40;
+    if (ipv6_len >= 56 && icmpv6[0] == ICMPV6_ROUTER_ADVERTISEMENT) {
+        IPv6RAInfo ra_info;
+        if (parse_router_advertisement(ipv6_packet, ipv6_len, &ra_info)) {
+            // Store gateway IPv6
+            if (ra_info.has_gateway) {
+                memcpy(tap->translator->gateway_ipv6, ra_info.gateway, 16);
+                tap->translator->has_ipv6_gateway = true;
+                
+                if (tap->config.verbose) {
+                    printf("[VirtualTap] Learned IPv6 gateway from RA\n");
+                }
+            }
+            
+            // Store prefix info if needed
+            if (ra_info.has_prefix && tap->config.verbose) {
+                printf("[VirtualTap] Received IPv6 prefix (length %d)\n", ra_info.prefix_length);
+            }
+            
+            tap->stats.icmpv6_packets++;
+        }
     }
     
     return 0;
@@ -269,12 +355,8 @@ int32_t virtual_tap_ethernet_to_ip(VirtualTap* tap, const uint8_t* eth_frame,
             // Check if ICMPv6 NDP (Neighbor Discovery Protocol)
             if (eth_len >= ETHERNET_HEADER_SIZE + 40 &&
                 is_icmpv6_ndp(eth_frame + ETHERNET_HEADER_SIZE, eth_len - ETHERNET_HEADER_SIZE)) {
-                tap->stats.icmpv6_packets++;
-                if (tap->config.verbose) {
-                    printf("[VirtualTap] Detected ICMPv6 NDP packet\n");
-                }
-                // Note: NDP handling can be added here if needed
-                // For now, pass through to translator
+                // Handle NS (respond) and RA (learn gateway)
+                handle_icmpv6_ndp(tap, eth_frame, eth_len);
             }
             
             {

@@ -2,6 +2,7 @@
 #include <string.h>
 #include <assert.h>
 #include "../include/virtual_tap.h"
+#include "../include/icmpv6_handler.h"
 
 void test_create_destroy() {
     printf("Test 1: Create and destroy... ");
@@ -287,6 +288,175 @@ void test_ipv6_from_ethernet() {
     printf("✅\n");
 }
 
+void test_icmpv6_ra_parsing() {
+    printf("Test 7: ICMPv6 Router Advertisement parsing... ");
+    
+    // Build minimal RA packet
+    uint8_t ipv6_packet[88] = {0};  // 40 (IPv6) + 48 (RA with prefix option)
+    
+    // IPv6 header
+    ipv6_packet[0] = 0x60;  // Version 6
+    ipv6_packet[4] = 0;     // Payload length high
+    ipv6_packet[5] = 48;    // Payload length low
+    ipv6_packet[6] = 58;    // Next header: ICMPv6
+    ipv6_packet[7] = 255;   // Hop limit
+    
+    // Source: fe80::1 (link-local gateway)
+    ipv6_packet[8] = 0xfe;
+    ipv6_packet[9] = 0x80;
+    ipv6_packet[23] = 0x01;
+    
+    // Dest: ff02::1 (all nodes)
+    ipv6_packet[24] = 0xff;
+    ipv6_packet[25] = 0x02;
+    ipv6_packet[39] = 0x01;
+    
+    // ICMPv6 RA header
+    ipv6_packet[40] = 134;  // Type: Router Advertisement
+    ipv6_packet[41] = 0;    // Code
+    ipv6_packet[42] = 0;    // Checksum (not validated in test)
+    ipv6_packet[43] = 0;
+    ipv6_packet[44] = 64;   // Cur hop limit
+    ipv6_packet[45] = 0;    // Flags (M=0, O=0)
+    ipv6_packet[46] = 0x04; // Router lifetime high (1024 seconds)
+    ipv6_packet[47] = 0x00; // Router lifetime low
+    
+    // Prefix Information Option (type 3, length 4)
+    ipv6_packet[56] = 3;    // Type
+    ipv6_packet[57] = 4;    // Length (32 bytes)
+    ipv6_packet[58] = 64;   // Prefix length
+    ipv6_packet[59] = 0xC0; // Flags (L=1, A=1)
+    // Valid lifetime: 86400 seconds
+    ipv6_packet[60] = 0x00;
+    ipv6_packet[61] = 0x01;
+    ipv6_packet[62] = 0x51;
+    ipv6_packet[63] = 0x80;
+    // Preferred lifetime: 14400 seconds
+    ipv6_packet[64] = 0x00;
+    ipv6_packet[65] = 0x00;
+    ipv6_packet[66] = 0x38;
+    ipv6_packet[67] = 0x40;
+    // Prefix: 2001:db8::/64
+    ipv6_packet[72] = 0x20;
+    ipv6_packet[73] = 0x01;
+    ipv6_packet[74] = 0x0d;
+    ipv6_packet[75] = 0xb8;
+    
+    IPv6RAInfo ra_info;
+    bool result = parse_router_advertisement(ipv6_packet, 88, &ra_info);
+    
+    assert(result == true);
+    assert(ra_info.has_gateway == true);
+    assert(ra_info.has_prefix == true);
+    assert(ra_info.prefix_length == 64);
+    assert(ra_info.prefix[0] == 0x20);
+    assert(ra_info.prefix[1] == 0x01);
+    assert(ra_info.prefix[2] == 0x0d);
+    assert(ra_info.prefix[3] == 0xb8);
+    assert(ra_info.gateway[0] == 0xfe);
+    assert(ra_info.gateway[1] == 0x80);
+    assert(ra_info.valid_lifetime == 86400);
+    assert(ra_info.preferred_lifetime == 14400);
+    
+    printf("✅\n");
+}
+
+void test_icmpv6_neighbor_solicitation() {
+    printf("Test 8: ICMPv6 Neighbor Solicitation detection... ");
+    
+    // Build NS packet
+    uint8_t ipv6_packet[64] = {0};  // 40 (IPv6) + 24 (NS minimum)
+    
+    // IPv6 header
+    ipv6_packet[0] = 0x60;  // Version 6
+    ipv6_packet[4] = 0;     // Payload length high
+    ipv6_packet[5] = 24;    // Payload length low
+    ipv6_packet[6] = 58;    // Next header: ICMPv6
+    ipv6_packet[7] = 255;   // Hop limit
+    
+    // Source: fe80::2
+    ipv6_packet[8] = 0xfe;
+    ipv6_packet[9] = 0x80;
+    ipv6_packet[23] = 0x02;
+    
+    // Dest: ff02::1:ff00:1 (solicited-node multicast)
+    ipv6_packet[24] = 0xff;
+    ipv6_packet[25] = 0x02;
+    ipv6_packet[37] = 0xff;
+    ipv6_packet[39] = 0x01;
+    
+    // ICMPv6 NS
+    ipv6_packet[40] = 135;  // Type: Neighbor Solicitation
+    ipv6_packet[41] = 0;    // Code
+    
+    // Target: 2001:db8::1
+    ipv6_packet[48] = 0x20;
+    ipv6_packet[49] = 0x01;
+    ipv6_packet[50] = 0x0d;
+    ipv6_packet[51] = 0xb8;
+    ipv6_packet[63] = 0x01;
+    
+    uint8_t target_ipv6[16];
+    bool result = is_neighbor_solicitation(ipv6_packet, 64, target_ipv6);
+    
+    assert(result == true);
+    assert(target_ipv6[0] == 0x20);
+    assert(target_ipv6[1] == 0x01);
+    assert(target_ipv6[2] == 0x0d);
+    assert(target_ipv6[3] == 0xb8);
+    assert(target_ipv6[15] == 0x01);
+    
+    printf("✅\n");
+}
+
+void test_icmpv6_neighbor_advertisement() {
+    printf("Test 9: ICMPv6 Neighbor Advertisement building... ");
+    
+    uint8_t our_ipv6[16] = {
+        0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0x01
+    };
+    uint8_t our_mac[6] = {0x02, 0x00, 0x5E, 0x10, 0x20, 0x30};
+    uint8_t solicitor_ipv6[16] = {
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0x02
+    };
+    
+    uint8_t na_packet[72];
+    int32_t result = build_neighbor_advertisement(
+        our_ipv6, our_mac, solicitor_ipv6, na_packet, 72
+    );
+    
+    assert(result == 72);
+    
+    // Check IPv6 header
+    assert((na_packet[0] >> 4) == 6);  // Version 6
+    assert(na_packet[6] == 58);         // Next header: ICMPv6
+    
+    // Check source = our IPv6
+    assert(memcmp(na_packet + 8, our_ipv6, 16) == 0);
+    
+    // Check dest = solicitor IPv6
+    assert(memcmp(na_packet + 24, solicitor_ipv6, 16) == 0);
+    
+    // Check ICMPv6 header
+    assert(na_packet[40] == 136);  // Type: Neighbor Advertisement
+    assert(na_packet[41] == 0);    // Code
+    
+    // Check flags (Solicited + Override)
+    assert((na_packet[44] & 0x60) == 0x60);
+    
+    // Check target = our IPv6
+    assert(memcmp(na_packet + 48, our_ipv6, 16) == 0);
+    
+    // Check target link-layer address option
+    assert(na_packet[64] == 2);  // Type: Target Link-Layer
+    assert(na_packet[65] == 1);  // Length: 1 (8 bytes)
+    assert(memcmp(na_packet + 66, our_mac, 6) == 0);
+    
+    printf("✅\n");
+}
+
 int main() {
     printf("=== VirtualTap C Implementation Tests ===\n\n");
     
@@ -296,6 +466,9 @@ int main() {
     test_arp_handling();
     test_ipv6_to_ethernet();
     test_ipv6_from_ethernet();
+    test_icmpv6_ra_parsing();
+    test_icmpv6_neighbor_solicitation();
+    test_icmpv6_neighbor_advertisement();
     
     printf("\n✅ All tests passed!\n");
     return 0;

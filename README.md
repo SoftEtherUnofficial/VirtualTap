@@ -148,7 +148,11 @@ VPN Server (ARP reply)
 
 ### ✅ Protocol Support
 - **IPv4**: Full support with header learning
-- **IPv6**: Pass-through support
+- **IPv6**: Full support with address learning and NDP handling
+  - **IPv6 Learning**: Learns global IPv6 addresses from outgoing packets (skips link-local)
+  - **ICMPv6 NDP**: Responds to Neighbor Solicitation (NS) with Neighbor Advertisement (NA)
+  - **Router Advertisement**: Parses RA packets to learn IPv6 gateway and network prefix
+  - **Gateway Learning**: Learns gateway MAC from IPv6 traffic
 - **ARP**: Complete request/reply handling with timeout
 
 ### ✅ Smart Learning
@@ -248,6 +252,8 @@ typedef struct {
     uint64_t arp_requests_handled;  // ARP requests answered
     uint64_t arp_replies_sent;      // ARP replies sent to server
     uint64_t ipv4_packets;          // IPv4 packets processed
+    uint64_t ipv6_packets;          // IPv6 packets processed
+    uint64_t icmpv6_packets;        // ICMPv6 NDP packets (NS/NA/RA)
     uint64_t arp_packets;           // ARP packets processed
     uint64_t dhcp_packets;          // DHCP packets parsed
     uint64_t arp_table_entries;     // Current ARP table size
@@ -280,22 +286,24 @@ typedef struct {
 ```
 VirtualTap/
 ├── include/
-│   ├── virtual_tap.h           # Public API (97 lines)
-│   └── virtual_tap_internal.h  # Internal structures (183 lines)
+│   ├── virtual_tap.h           # Public API (99 lines)
+│   ├── virtual_tap_internal.h  # Internal structures (191 lines)
+│   └── icmpv6_handler.h        # ICMPv6 NDP API (105 lines)
 ├── src/
-│   ├── virtual_tap.c           # Main module (349 lines)
+│   ├── virtual_tap.c           # Main module (435 lines)
 │   ├── arp_handler.c           # ARP protocol (209 lines)
-│   ├── translator.c            # L2↔L3 translation (219 lines)
+│   ├── translator.c            # L2↔L3 translation (245 lines)
 │   ├── dhcp_parser.c           # DHCP parsing (132 lines)
-│   └── ip_utils.c              # IP utilities (26 lines)
+│   ├── ip_utils.c              # IP utilities (69 lines)
+│   └── icmpv6_handler.c        # ICMPv6 NDP handling (255 lines)
 ├── test/
-│   └── test_basic.c            # Unit tests (195 lines)
+│   └── test_basic.c            # Unit tests (476 lines)
 ├── Makefile                    # Build system
 ├── README.md                   # This file
-└── DEVELOPMENT_PLAN.md         # Implementation guide
+└── ROADMAP.md                  # Development roadmap
 ```
 
-**Total:** ~1,410 lines of C code
+**Total:** ~2,025 lines of C code
 
 ### ARP Packet Format (42 bytes)
 
@@ -341,6 +349,11 @@ Test 1: Create and destroy... ✅
 Test 2: IP to Ethernet conversion... ✅
 Test 3: Ethernet to IP conversion... ✅
 Test 4: ARP request handling... ✅
+Test 5: IPv6 to Ethernet conversion... ✅
+Test 6: IPv6 from Ethernet extraction... ✅
+Test 7: ICMPv6 Router Advertisement parsing... ✅
+Test 8: ICMPv6 Neighbor Solicitation detection... ✅
+Test 9: ICMPv6 Neighbor Advertisement building... ✅
 
 ✅ All tests passed!
 ```
@@ -348,9 +361,12 @@ Test 4: ARP request handling... ✅
 ### Test Coverage
 
 - ✅ Instance creation/destruction
-- ✅ IP → Ethernet packet conversion
-- ✅ Ethernet → IP packet conversion
+- ✅ IP → Ethernet packet conversion (IPv4 and IPv6)
+- ✅ Ethernet → IP packet conversion (IPv4 and IPv6)
 - ✅ ARP request → reply cycle
+- ✅ ICMPv6 Router Advertisement parsing
+- ✅ ICMPv6 Neighbor Solicitation detection
+- ✅ ICMPv6 Neighbor Advertisement building
 - ✅ Statistics tracking
 - ✅ Memory safety (no leaks)
 
