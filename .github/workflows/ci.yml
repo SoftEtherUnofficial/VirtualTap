@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang make
+    
+    - name: Build library
+      run: make
+    
+    - name: Run tests
+      run: make test
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: libvirtualtap-linux
+        path: libvirtualtap.a
+
+  build-macos:
+    runs-on: macos-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Build library
+      run: make
+    
+    - name: Run tests
+      run: make test
+    
+    - name: Build iOS library
+      run: make ios
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: libvirtualtap-macos-ios
+        path: |
+          libvirtualtap.a
+          libvirtualtap_ios.a
