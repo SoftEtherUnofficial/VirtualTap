@@ -220,7 +220,7 @@ int32_t dns_build_response(const DnsQuery* query,
     }
     
     // Calculate response size
-    uint32_t name_len = strlen(query->name);
+    uint32_t name_len = (uint32_t)strlen(query->name);
     uint32_t labels_size = name_len + 2;  // Labels + length bytes + null
     uint32_t question_size = labels_size + 4;  // + type + class
     uint32_t answer_size = (rcode == 0 && answer_data) ? 
@@ -258,7 +258,7 @@ int32_t dns_build_response(const DnsQuery* query,
     const char* label_start = query->name;
     while (*label_start) {
         const char* dot = strchr(label_start, '.');
-        uint32_t label_len = dot ? (dot - label_start) : strlen(label_start);
+        uint32_t label_len = dot ? (uint32_t)(dot - label_start) : (uint32_t)strlen(label_start);
         
         dns[offset++] = label_len;
         memcpy(dns + offset, label_start, label_len);
