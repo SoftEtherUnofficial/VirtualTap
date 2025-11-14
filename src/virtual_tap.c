@@ -405,7 +405,28 @@ int32_t virtual_tap_ethernet_to_ip(VirtualTap* tap, const uint8_t* eth_frame,
                 
                 // Parse DHCP to learn IP/gateway
                 DhcpInfo dhcp;
+                if (tap->config.verbose) {
+                    printf("[VirtualTap] 🔍 DHCP packet detected (packet #%llu)\n", 
+                           (unsigned long long)tap->stats.dhcp_packets);
+                }
                 if (dhcp_parse_packet(ip_packet, ip_packet_len, &dhcp) == 0) {
+                    if (tap->config.verbose) {
+                        const char* type_name = "UNKNOWN";
+                        switch (dhcp.message_type) {
+                            case 1: type_name = "DISCOVER"; break;
+                            case 2: type_name = "OFFER"; break;
+                            case 3: type_name = "REQUEST"; break;
+                            case 4: type_name = "DECLINE"; break;
+                            case 5: type_name = "ACK"; break;
+                            case 6: type_name = "NAK"; break;
+                            case 7: type_name = "RELEASE"; break;
+                            case 8: type_name = "INFORM"; break;
+                        }
+                        printf("[VirtualTap] 📦 DHCP %s (type=%d): offered_ip=%d.%d.%d.%d\n",
+                               type_name, dhcp.message_type, 
+                               dhcp.offered_ip[0], dhcp.offered_ip[1],
+                               dhcp.offered_ip[2], dhcp.offered_ip[3]);
+                    }
                     if (tap->config.learn_ip && dhcp.offered_ip[0] != 0) {
                         uint32_t offered = ipv4_to_u32(dhcp.offered_ip);
                         translator_set_our_ip(tap->translator, offered);
