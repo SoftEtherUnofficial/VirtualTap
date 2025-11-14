@@ -57,27 +57,14 @@ int translator_ip_to_ethernet(Translator* t, const uint8_t* ip_packet, uint32_t 
     if (version == 4) {
         ethertype = ETHERTYPE_IPV4;
         
-        // Learn our IP from source IP field (bytes 12-15)
-        if (ip_len >= 20 && t->our_ip == 0) {
-            t->our_ip = read_u32_be(ip_packet + 12);
-            if (t->verbose) {
-                printf("[Translator] Learned our IPv4 from outgoing packet\n");
-            }
-        }
+        // DO NOT learn IP from outgoing packets - wait for DHCP from server
+        // Learning from outgoing would use the temporary tunnel IP (10.0.0.1)
+        // instead of the real DHCP-assigned IP
     } else if (version == 6) {
         ethertype = ETHERTYPE_IPV6;
         
-        // Learn our IPv6 from source address (bytes 8-23)
-        if (ip_len >= 40 && !t->has_ipv6) {
-            extract_ipv6_address(ip_packet, 8, t->our_ipv6);
-            // Don't learn link-local addresses as primary
-            if (!is_ipv6_link_local(t->our_ipv6)) {
-                t->has_ipv6 = true;
-                if (t->verbose) {
-                    printf("[Translator] Learned our IPv6 from outgoing packet\n");
-                }
-            }
-        }
+        // DO NOT learn IPv6 from outgoing packets - wait for server responses
+        // Learning from outgoing would use temporary addresses instead of real ones
     } else {
         return VTAP_ERROR_PARSE_FAILED;
     }
@@ -127,6 +114,68 @@ int translator_ethernet_to_ip(Translator* t, const uint8_t* eth_frame, uint32_t 
     
     // Extract EtherType
     uint16_t ethertype = read_u16_be(eth_frame + 12);
+    
+    // Learn our IP from INCOMING packets
+    if (ethertype == ETHERTYPE_IPV4 && eth_len >= ETHERNET_HEADER_SIZE + 20) {
+        const uint8_t* ip_header = eth_frame + ETHERNET_HEADER_SIZE;
+        
+        // Check if this is a DHCP packet (UDP ports 67/68)
+        uint8_t protocol = ip_header[9];
+        if (protocol == 17 && t->our_ip == 0) {  // UDP
+            uint8_t ihl = (ip_header[0] & 0x0F) * 4;
+            if (eth_len >= ETHERNET_HEADER_SIZE + ihl + 8) {
+                const uint8_t* udp_header = ip_header + ihl;
+                uint16_t src_port = read_u16_be(udp_header);
+                uint16_t dst_port = read_u16_be(udp_header + 2);
+                
+                // DHCP server response (port 67 → 68)
+                if (src_port == 67 && dst_port == 68) {
+                    DhcpInfo dhcp;
+                    if (dhcp_parse_packet(ip_header, eth_len - ETHERNET_HEADER_SIZE, &dhcp) == 0) {
+                        // DHCP OFFER (2) or ACK (5) - learn offered IP
+                        if ((dhcp.message_type == 2 || dhcp.message_type == 5) && 
+                            dhcp.offered_ip[0] != 0) {
+                            t->our_ip = read_u32_be(dhcp.offered_ip);
+                            if (t->verbose) {
+                                printf("[Translator] ✅ Learned IP from DHCP %s: %d.%d.%d.%d\n",
+                                       dhcp.message_type == 2 ? "OFFER" : "ACK",
+                                       dhcp.offered_ip[0], dhcp.offered_ip[1],
+                                       dhcp.offered_ip[2], dhcp.offered_ip[3]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fallback: learn from destination IP if not broadcast (for non-DHCP packets)
+        if (t->our_ip == 0) {
+            uint32_t dest_ip = read_u32_be(ip_header + 16);  // Destination IP
+            if (dest_ip != 0xFFFFFFFF && dest_ip != 0) {  // Not broadcast, not zero
+                t->our_ip = dest_ip;
+                if (t->verbose) {
+                    printf("[Translator] ✅ Learned our IPv4 from INCOMING packet: %d.%d.%d.%d\n",
+                           (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF,
+                           (dest_ip >> 8) & 0xFF, dest_ip & 0xFF);
+                }
+            }
+        }
+    }
+    
+    // Learn our IPv6 from INCOMING packets (destination IPv6 = our IPv6)
+    if (ethertype == ETHERTYPE_IPV6 && eth_len >= ETHERNET_HEADER_SIZE + 40 && !t->has_ipv6) {
+        uint8_t dest_ipv6[16];
+        extract_ipv6_address(eth_frame + ETHERNET_HEADER_SIZE, 24, dest_ipv6);  // Dest at offset 24
+        
+        // Learn if not link-local and not multicast
+        if (!is_ipv6_link_local(dest_ipv6) && (dest_ipv6[0] != 0xFF)) {
+            memcpy(t->our_ipv6, dest_ipv6, 16);
+            t->has_ipv6 = true;
+            if (t->verbose) {
+                printf("[Translator] ✅ Learned our IPv6 from INCOMING packet\n");
+            }
+        }
+    }
     
     // Learn gateway MAC from source MAC if this is from gateway
     if (t->learn_gateway_mac && t->gateway_ip != 0) {
