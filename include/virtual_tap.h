@@ -36,6 +36,7 @@ typedef struct {
     uint64_t eth_to_ip_packets;
     uint64_t arp_requests_handled;
     uint64_t arp_replies_sent;
+    uint64_t arp_requests_sent;
     uint64_t ipv4_packets;
     uint64_t ipv6_packets;
     uint64_t arp_packets;
@@ -107,6 +108,14 @@ int32_t virtual_tap_pop_arp_reply(
     VirtualTap* tap,
     uint8_t* arp_reply_out,
     uint32_t out_capacity
+);
+
+/// Send ARP request for a specific IP address
+/// This will generate an ARP request packet and queue it for sending
+/// Returns 0 on success, negative error code on failure
+int32_t virtual_tap_send_arp_request(
+    VirtualTap* tap,
+    uint32_t target_ip
 );
 
 // ============================================================================

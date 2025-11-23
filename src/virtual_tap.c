@@ -613,6 +613,11 @@ bool virtual_tap_get_gateway_mac(VirtualTap* tap, uint8_t mac_out[6]) {
     return translator_get_gateway_mac(tap->translator, mac_out);
 }
 
+// WORKAROUND: Expose translator for direct gateway MAC setting (ARP-less operation)
+void* virtual_tap_get_translator(VirtualTap* tap) {
+    return tap ? tap->translator : NULL;
+}
+
 void virtual_tap_get_stats(VirtualTap* tap, VirtualTapStats* stats) {
     if (!tap || !stats) return;
     memcpy(stats, &tap->stats, sizeof(VirtualTapStats));
@@ -652,4 +657,42 @@ int32_t virtual_tap_pop_arp_reply(VirtualTap* tap, uint8_t* arp_reply_out,
     free(node);
     
     return len;
+}
+
+int32_t virtual_tap_send_arp_request(VirtualTap* tap, uint32_t target_ip) {
+    if (!tap || target_ip == 0) {
+        return VTAP_ERROR_INVALID_PARAMS;
+    }
+    
+    uint32_t our_ip = translator_get_our_ip(tap->translator);
+    if (our_ip == 0) {
+        // Can't send ARP request without knowing our own IP
+        return VTAP_ERROR_INVALID_PARAMS;
+    }
+    
+    // Build ARP request
+    uint8_t* request = (uint8_t*)malloc(ARP_PACKET_SIZE);
+    if (!request) {
+        return VTAP_ERROR_ALLOC_FAILED;
+    }
+    
+    int result = arp_build_request(tap->config.our_mac, our_ip, target_ip,
+                                   request, ARP_PACKET_SIZE);
+    
+    if (result != ARP_PACKET_SIZE) {
+        free(request);
+        return result;
+    }
+    
+    // Queue ARP request (use same queue as ARP replies)
+    arp_reply_queue_push(tap, request, ARP_PACKET_SIZE);
+    tap->stats.arp_requests_sent++;
+    
+    if (tap->config.verbose) {
+        printf("[VirtualTap] 📡 Sent ARP request for %d.%d.%d.%d\n",
+               (target_ip >> 24) & 0xFF, (target_ip >> 16) & 0xFF,
+               (target_ip >> 8) & 0xFF, target_ip & 0xFF);
+    }
+    
+    return 0;
 }

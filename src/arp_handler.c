@@ -207,3 +207,45 @@ int arp_build_reply(const uint8_t our_mac[6], uint32_t our_ip,
     
     return ARP_PACKET_SIZE;
 }
+
+int arp_build_request(const uint8_t our_mac[6], uint32_t our_ip,
+                      uint32_t target_ip,
+                      uint8_t* packet_out, uint32_t out_capacity) {
+    if (!our_mac || !packet_out || out_capacity < ARP_PACKET_SIZE) {
+        return VTAP_ERROR_INVALID_PARAMS;
+    }
+    
+    // Build 42-byte ARP request frame:
+    // [0-5]   Dest MAC (broadcast)
+    // [6-11]  Src MAC (us)
+    // [12-13] EtherType: 0x0806 (ARP)
+    // [14-15] Hardware type: 0x0001
+    // [16-17] Protocol type: 0x0800
+    // [18]    Hardware size: 6
+    // [19]    Protocol size: 4
+    // [20-21] Operation: 0x0001 (Request)
+    // [22-27] Sender MAC (us)
+    // [28-31] Sender IP (us)
+    // [32-37] Target MAC (00:00:00:00:00:00)
+    // [38-41] Target IP (who we're looking for)
+    
+    // Ethernet header - broadcast destination
+    memset(packet_out, 0xFF, 6);  // Broadcast MAC
+    memcpy(packet_out + 6, our_mac, 6);
+    write_u16_be(packet_out + 12, ETHERTYPE_ARP);
+    
+    // ARP header
+    write_u16_be(packet_out + 14, ARP_HARDWARE_ETHERNET);
+    write_u16_be(packet_out + 16, ARP_PROTOCOL_IPV4);
+    packet_out[18] = 6;
+    packet_out[19] = 4;
+    write_u16_be(packet_out + 20, ARP_OP_REQUEST);
+    
+    // ARP payload
+    memcpy(packet_out + 22, our_mac, 6);
+    write_u32_be(packet_out + 28, our_ip);
+    memset(packet_out + 32, 0, 6);  // Target MAC unknown
+    write_u32_be(packet_out + 38, target_ip);
+    
+    return ARP_PACKET_SIZE;
+}

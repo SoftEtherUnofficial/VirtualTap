@@ -157,6 +157,10 @@ int arp_build_reply(const uint8_t our_mac[6], uint32_t our_ip,
                     const uint8_t target_mac[6], uint32_t target_ip,
                     uint8_t* packet_out, uint32_t out_capacity);
 
+int arp_build_request(const uint8_t our_mac[6], uint32_t our_ip,
+                      uint32_t target_ip,
+                      uint8_t* packet_out, uint32_t out_capacity);
+
 // Forward declarations - Translator (translator.c)
 Translator* translator_create(const uint8_t our_mac[6], bool handle_arp,
                               bool learn_gateway_mac, bool verbose);
