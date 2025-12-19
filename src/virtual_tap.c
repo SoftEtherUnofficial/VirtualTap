@@ -11,6 +11,21 @@
 static void arp_reply_queue_push(VirtualTap* tap, uint8_t* packet, uint32_t len) {
     if (!tap || !packet) return;
     
+    // P0 FIX: Enforce ARP_REPLY_QUEUE_MAX to prevent unbounded memory growth
+    if (tap->arp_queue_count >= ARP_REPLY_QUEUE_MAX) {
+        // Queue full - drop oldest packet to make room
+        if (tap->arp_reply_head) {
+            ArpReplyNode* old = tap->arp_reply_head;
+            tap->arp_reply_head = old->next;
+            if (tap->arp_reply_head == NULL) {
+                tap->arp_reply_tail = NULL;
+            }
+            free(old->packet);
+            free(old);
+            tap->arp_queue_count--;
+        }
+    }
+    
     ArpReplyNode* node = (ArpReplyNode*)malloc(sizeof(ArpReplyNode));
     if (!node) {
         free(packet);
@@ -27,6 +42,7 @@ static void arp_reply_queue_push(VirtualTap* tap, uint8_t* packet, uint32_t len)
         tap->arp_reply_tail->next = node;
         tap->arp_reply_tail = node;
     }
+    tap->arp_queue_count++;
 }
 
 static int handle_arp(VirtualTap* tap, const uint8_t* eth_frame, uint32_t eth_len) {
@@ -190,6 +206,11 @@ static int handle_dns_query(VirtualTap* tap, const uint8_t* ip_packet, uint32_t 
         return 0;
     }
     
+    // P1 FIX: Early exit if DNS cache disabled - avoid parsing all UDP packets
+    if (!tap->dns_cache) {
+        return 0;  // Cache disabled, skip all DNS processing
+    }
+    
     // Check if UDP
     uint8_t protocol = ip_packet[9];
     if (protocol != 17) {  // UDP
@@ -216,12 +237,6 @@ static int handle_dns_query(VirtualTap* tap, const uint8_t* ip_packet, uint32_t 
     DnsQuery query;
     if (!dns_parse_query(udp_packet, udp_len, &query)) {
         return 0;
-    }
-    
-    // Check cache if enabled
-    if (!tap->dns_cache) {
-        tap->stats.dns_cache_misses++;
-        return 0;  // Cache disabled, pass through
     }
     
     DnsCache* cache = (DnsCache*)tap->dns_cache;
@@ -398,8 +413,9 @@ int32_t virtual_tap_ethernet_to_ip(VirtualTap* tap, const uint8_t* eth_frame,
             const uint8_t* ip_packet = eth_frame + ETHERNET_HEADER_SIZE;
             uint32_t ip_packet_len = eth_len - ETHERNET_HEADER_SIZE;
             
-            // Check if DHCP
-            if (ip_packet_len >= 20 &&
+            // P1 FIX: Skip DHCP check after IP is learned (saves function call on every packet)
+            // Check if DHCP - only if DHCP not yet complete
+            if (!tap->dhcp_complete && ip_packet_len >= 20 &&
                 dhcp_is_dhcp_packet(ip_packet, ip_packet_len)) {
                 tap->stats.dhcp_packets++;
                 
@@ -430,6 +446,10 @@ int32_t virtual_tap_ethernet_to_ip(VirtualTap* tap, const uint8_t* eth_frame,
                     if (tap->config.learn_ip && dhcp.offered_ip[0] != 0) {
                         uint32_t offered = ipv4_to_u32(dhcp.offered_ip);
                         translator_set_our_ip(tap->translator, offered);
+                        // P1 FIX: Mark DHCP as complete when we learn IP (ACK = type 5)
+                        if (dhcp.message_type == 5) {
+                            tap->dhcp_complete = true;
+                        }
                         if (tap->config.verbose) {
                             printf("[VirtualTap] Learned IP from DHCP: %d.%d.%d.%d\n",
                                    dhcp.offered_ip[0], dhcp.offered_ip[1],
@@ -439,10 +459,17 @@ int32_t virtual_tap_ethernet_to_ip(VirtualTap* tap, const uint8_t* eth_frame,
                     if (dhcp.gateway[0] != 0) {
                         uint32_t gateway = ipv4_to_u32(dhcp.gateway);
                         translator_set_gateway_ip(tap->translator, gateway);
+                        
+                        // CRITICAL FIX: Learn gateway MAC from DHCP response source MAC
+                        // In SecureNAT/LocalBridge setups, DHCP server IS the gateway
+                        // Extract source MAC from Ethernet frame header (bytes 6-11)
+                        const uint8_t* src_mac = eth_frame + 6;
+                        translator_set_gateway_mac(tap->translator, src_mac);
                         if (tap->config.verbose) {
-                            printf("[VirtualTap] Learned gateway from DHCP: %d.%d.%d.%d\n",
+                            printf("[VirtualTap] Learned gateway from DHCP: %d.%d.%d.%d MAC=%02x:%02x:%02x:%02x:%02x:%02x\n",
                                    dhcp.gateway[0], dhcp.gateway[1],
-                                   dhcp.gateway[2], dhcp.gateway[3]);
+                                   dhcp.gateway[2], dhcp.gateway[3],
+                                   src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5]);
                         }
                     }
                 }
@@ -643,6 +670,7 @@ int32_t virtual_tap_pop_arp_reply(VirtualTap* tap, uint8_t* arp_reply_out,
     if (tap->arp_reply_head == NULL) {
         tap->arp_reply_tail = NULL;
     }
+    tap->arp_queue_count--;  // P0 FIX: Track queue count
     
     if (node->length > out_capacity) {
         free(node->packet);
@@ -695,4 +723,12 @@ int32_t virtual_tap_send_arp_request(VirtualTap* tap, uint32_t target_ip) {
     }
     
     return 0;
+}
+
+// P0 FIX: Public API for fragment cleanup - must be called periodically to prevent memory leaks
+uint32_t virtual_tap_cleanup_fragments(VirtualTap* tap) {
+    if (!tap || !tap->fragment_handler) {
+        return 0;
+    }
+    return fragment_cleanup_expired((FragmentHandler*)tap->fragment_handler);
 }

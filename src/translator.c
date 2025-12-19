@@ -74,16 +74,8 @@ int translator_ip_to_ethernet(Translator* t, const uint8_t* ip_packet, uint32_t 
     if (dest_mac) {
         memcpy(dest, dest_mac, 6);
     } else {
-        // Check if gateway MAC is known
-        bool has_gateway = false;
-        for (int i = 0; i < 6; i++) {
-            if (t->gateway_mac[i] != 0) {
-                has_gateway = true;
-                break;
-            }
-        }
-        
-        if (has_gateway) {
+        // P3 FIX: Use boolean flag instead of 6-byte loop
+        if (t->has_gateway_mac) {
             memcpy(dest, t->gateway_mac, 6);
         } else {
             // Use broadcast
@@ -272,24 +264,19 @@ void translator_set_gateway_ip(Translator* t, uint32_t ip) {
 bool translator_get_gateway_mac(Translator* t, uint8_t mac_out[6]) {
     if (!t || !mac_out) return false;
     
-    bool has_mac = false;
-    for (int i = 0; i < 6; i++) {
-        if (t->gateway_mac[i] != 0) {
-            has_mac = true;
-            break;
-        }
-    }
-    
-    if (has_mac) {
+    // P3 FIX: Use boolean flag instead of 6-byte comparison
+    if (t->has_gateway_mac) {
         memcpy(mac_out, t->gateway_mac, 6);
+        return true;
     }
     
-    return has_mac;
+    return false;
 }
 
 void translator_set_gateway_mac(Translator* t, const uint8_t mac[6]) {
     if (t && mac) {
         memcpy(t->gateway_mac, mac, 6);
+        t->has_gateway_mac = true;  // P3 FIX: Set flag when MAC is set
         t->last_gateway_learn_ms = get_time_ms();
     }
 }

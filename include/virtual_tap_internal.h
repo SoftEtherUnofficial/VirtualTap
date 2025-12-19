@@ -106,6 +106,7 @@ typedef struct {
     uint32_t our_ip;                // IPv4 address
     uint32_t gateway_ip;            // IPv4 gateway
     uint8_t gateway_mac[6];
+    bool has_gateway_mac;           // P3 FIX: Avoid 6-byte loop on every packet
     
     // IPv6 support
     uint8_t our_ipv6[16];           // IPv6 address
@@ -142,6 +143,8 @@ struct VirtualTap {
     void* fragment_handler;  // FragmentHandler* (forward declared)
     ArpReplyNode* arp_reply_head;
     ArpReplyNode* arp_reply_tail;
+    uint32_t arp_queue_count;  // P0 FIX: Track ARP queue size to enforce ARP_REPLY_QUEUE_MAX
+    bool dhcp_complete;        // P1 FIX: Skip DHCP checks after IP learned
     VirtualTapStats stats;
 };
 

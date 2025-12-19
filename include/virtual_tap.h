@@ -118,6 +118,12 @@ int32_t virtual_tap_send_arp_request(
     uint32_t target_ip
 );
 
+/// Clean up expired fragment reassembly chains
+/// MUST be called periodically (every 5-30 seconds) to prevent memory leaks
+/// from incomplete fragment chains
+/// Returns number of chains cleaned up
+uint32_t virtual_tap_cleanup_fragments(VirtualTap* tap);
+
 // ============================================================================
 // DHCP Packet Building
 // ============================================================================
